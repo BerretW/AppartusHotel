@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import crud, models, schemas
 from .database import get_db
-from .security import settings
+from .config import settings
 from .models import UserRole
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
@@ -47,6 +47,8 @@ def require_role(required_roles: list[UserRole]):
     return role_checker
 
 # Konkrétní závislosti pro snadnější použití
+is_owner = require_role([UserRole.majitel])
 is_admin_or_manager = require_role([UserRole.majitel, UserRole.spravce])
-is_storekeeper = require_role([UserRole.skladnik])
-is_housekeeper = require_role([UserRole.uklizecka])
+is_storekeeper_or_manager = require_role([UserRole.skladnik, UserRole.spravce, UserRole.majitel])
+is_housekeeper_or_manager = require_role([UserRole.uklizecka, UserRole.spravce, UserRole.majitel])
+can_change_room_status = require_role([UserRole.uklizecka, UserRole.recepcni, UserRole.spravce, UserRole.majitel])

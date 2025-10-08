@@ -7,13 +7,16 @@ BASE_URL = "http://127.0.0.1:8000"
 timestamp = int(time.time())
 ADMIN_EMAIL = f"admin.{timestamp}@hotel.com"
 HOUSEKEEPER_EMAIL = f"uklizecka.{timestamp}@hotel.com"
-ADMIN_PASSWORD = "admin"
+STOREKEEPER_EMAIL = f"skladnik.{timestamp}@hotel.com"
+ADMIN_PASSWORD = "admin_password"
+USER_PASSWORD = "password123"
 
 # Globální proměnné, které budeme postupně naplňovat
 admin_token = None
 housekeeper_token = None
+storekeeper_token = None
 housekeeper_user_id = None
-central_storage_id = None # Budeme předpokládat, že Centrální sklad má vždy ID 1
+central_storage_id = None
 
 # --- Pomocné funkce ---
 
@@ -38,14 +41,18 @@ def print_result(response, expected_status_code=None):
         print(f"  \033[92mSUCCESS (Status: {status_code})\033[0m")
         return data
     else:
-        print(f"  \033[91mFAILURE (Status: {status_code})\033[0m")
+        print(f"  \033[91mFAILURE (Status: {status_code}, Očekáváno: {expected_status_code})\033[0m")
         print(f"  CHYBA: {data}")
-        # Tato výjimka zastaví celý skript, pokud krok selže
         raise AssertionError(f"Test selhal v kroku '{response.request.method} {response.request.url}' se statusem {status_code}")
 
 def get_headers(token_type="admin"):
     """Vrátí autorizační hlavičku pro daný typ uživatele."""
-    token = admin_token if token_type == "admin" else housekeeper_token
+    token_map = {
+        "admin": admin_token,
+        "housekeeper": housekeeper_token,
+        "storekeeper": storekeeper_token
+    }
+    token = token_map.get(token_type)
     if not token: 
         raise ValueError(f"Token pro '{token_type}' není k dispozici.")
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -53,7 +60,7 @@ def get_headers(token_type="admin"):
 # --- Hlavní testovací scénář ---
 
 def run_hotel_tests():
-    global admin_token, housekeeper_token, housekeeper_user_id, central_storage_id
+    global admin_token, housekeeper_token, storekeeper_token, housekeeper_user_id, central_storage_id
 
     # 1. VYTVOŘENÍ ZÁKLADNÍCH UŽIVATELŮ A PŘIHLÁŠENÍ
     print_step("1. Vytvoření uživatelů a přihlášení")
@@ -62,15 +69,25 @@ def run_hotel_tests():
 
     login_payload = {"username": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
     admin_token = print_result(requests.post(f"{BASE_URL}/auth/token", data=login_payload), 200)["access_token"]
-    print("  -> Admin úspěšně vytvořen a přihlášen.")
+    print("  -> Admin (majitel) úspěšně vytvořen a přihlášen.")
 
-    housekeeper_payload = {"email": HOUSEKEEPER_EMAIL, "password": "password123", "role": "uklizecka"}
-    housekeeper_data = print_result(requests.post(f"{BASE_URL}/users/", json=housekeeper_payload, headers=get_headers()), 201)
+    housekeeper_payload = {"email": HOUSEKEEPER_EMAIL, "password": USER_PASSWORD, "role": "uklizecka"}
+    housekeeper_data = print_result(requests.post(f"{BASE_URL}/users/admin_create_user/", json=housekeeper_payload, headers=get_headers()), 201)
     housekeeper_user_id = housekeeper_data["id"]
     print("  -> Uklízečka úspěšně vytvořena adminem.")
 
+    storekeeper_payload = {"email": STOREKEEPER_EMAIL, "password": USER_PASSWORD, "role": "skladnik"}
+    print_result(requests.post(f"{BASE_URL}/users/admin_create_user/", json=storekeeper_payload, headers=get_headers()), 201)
+    print("  -> Skladník úspěšně vytvořen adminem.")
+
     # 2. PŘÍPRAVA PROSTŘEDÍ (POKOJE A SKLAD)
     print_step("2. Příprava pokojů a skladu")
+    locations = print_result(requests.get(f"{BASE_URL}/inventory/locations/", headers=get_headers()), 200)
+    central_storage = next((loc for loc in locations if loc["name"] == "Centrální sklad"), None)
+    assert central_storage is not None, "Centrální sklad nebyl nalezen!"
+    central_storage_id = central_storage["id"]
+    print(f"  -> Centrální sklad nalezen (ID: {central_storage_id}).")
+
     room_payload = {"number": "101", "type": "Apartmá", "capacity": 4}
     room_data = print_result(requests.post(f"{BASE_URL}/rooms/", json=room_payload, headers=get_headers()), 201)
     room_101_id = room_data["id"]
@@ -82,37 +99,26 @@ def run_hotel_tests():
     coke_id = item_data["id"]
     print(f"  -> Skladová položka 'Coca-Cola' (ID: {coke_id}) vytvořena.")
 
-    # Předpokládáme, že "Centrální sklad" je první lokace vytvořená systémem a má ID 1
-    central_storage_id = 1 
-
     # 3. ZÁKLADNÍ SKLADOVÉ OPERACE
-    print_step("3. Skladové operace")
-    # Tuto operaci v API nemáme jako samostatný endpoint, simulujeme ji přesunem
-    # Ve vaší aplikaci by se toto dělo přes příjemku
-    print("  -> Simulace naskladnění 24ks Coca-Coly do centrálního skladu...")
-    # Ve skutečnosti bychom zde testovali endpoint na příjemku, který ale nemáme
-    # Pro účely testu použijeme a otestujeme přesun (přesuneme 0 -> 24)
-    # Pro tento test musíme vytvořit fiktivní lokaci
-    initial_stock_loc_payload = {"name": f"Dodavatel {timestamp}"}
-    # Tuto operaci pro vytvoření lokace v API nemáme, takže tento krok je jen ukázka
-    # Místo toho otestujeme přesun mezi existujícími lokacemi níže.
+    print_step("3. Skladové operace - Příjemka a Přesun")
+    storekeeper_login_payload = {"username": STOREKEEPER_EMAIL, "password": USER_PASSWORD}
+    storekeeper_token = print_result(requests.post(f"{BASE_URL}/auth/token", data=storekeeper_login_payload), 200)["access_token"]
+    
+    print("  -> Vytvoření příjemky na 24ks Coca-Coly do centrálního skladu...")
+    receipt_payload = {
+        "supplier": f"Dodavatel Limonad {timestamp}",
+        "items": [{"item_id": coke_id, "quantity": 24}]
+    }
+    print_result(requests.post(f"{BASE_URL}/inventory/receipts/", json=receipt_payload, headers=get_headers("storekeeper")), 201)
 
     print("  -> Přesun 10ks Coca-Coly z centrálního skladu do minibaru pokoje 101...")
-    # Nejprve musíme do centrálního skladu "fiktivně" něco přidat, protože nemáme příjemky
-    # Tento endpoint je v API zabezpečen pro skladníka, což je správně
-    add_payload = {"item_id": coke_id, "quantity": 24}
-    # Musíme se na chvíli "stát" skladníkem - v reálu bychom měli skladníka a přihlásili ho
-    # Zde pro zjednodušení testu tento endpoint odemkneme pro admina
-    # V app/routers/inventory.py odstraňte závislost u add_stock pro tento test
-    print_result(requests.post(f"{BASE_URL}/inventory/stock/add", json=add_payload, headers=get_headers()), 200)
-
     transfer_payload = {
         "item_id": coke_id,
         "quantity": 10,
         "source_location_id": central_storage_id,
         "destination_location_id": room_101_location_id
     }
-    print_result(requests.post(f"{BASE_URL}/inventory/stock/transfer", json=transfer_payload, headers=get_headers()), 200)
+    print_result(requests.post(f"{BASE_URL}/inventory/stock/transfer", json=transfer_payload, headers=get_headers("storekeeper")), 200)
 
     print("  -> Kontrola stavu zásob na pokoji 101...")
     stock_response = print_result(requests.get(f"{BASE_URL}/inventory/locations/{room_101_location_id}/stock", headers=get_headers()), 200)
@@ -134,8 +140,7 @@ def run_hotel_tests():
     print(f"  -> Vytvořen úkol (ID: {task_id}) pro uklízečku.")
 
     print("  -> Uklízečka si načítá své úkoly...")
-    # Musíme se přihlásit jako uklízečka
-    housekeeper_login_payload = {"username": HOUSEKEEPER_EMAIL, "password": "password123"}
+    housekeeper_login_payload = {"username": HOUSEKEEPER_EMAIL, "password": USER_PASSWORD}
     housekeeper_token = print_result(requests.post(f"{BASE_URL}/auth/token", data=housekeeper_login_payload), 200)["access_token"]
     
     start_date = datetime.now().strftime('%Y-%m-%d')
@@ -146,12 +151,13 @@ def run_hotel_tests():
     print("  -> Úkoly úspěšně načteny.")
 
     print("  -> Uklízečka mění stav pokoje a úkolu...")
-    # Uklízečka začíná úklid
-    status_payload = {"status": "cleaning_in_progress"}
+    
+    # Uklízečka začíná úklid - ZDE JE OPRAVA
+    status_payload = {"status": "Probíhá úklid"}
     print_result(requests.patch(f"{BASE_URL}/rooms/{room_101_id}/status", json=status_payload, headers=get_headers("housekeeper")), 200)
     
-    # Uklízečka dokončila úklid
-    status_payload = {"status": "available_clean"}
+    # Uklízečka dokončila úklid - ZDE JE OPRAVA
+    status_payload = {"status": "Volno - Uklizeno"}
     print_result(requests.patch(f"{BASE_URL}/rooms/{room_101_id}/status", json=status_payload, headers=get_headers("housekeeper")), 200)
 
     # Uklízečka označí úkol jako dokončený
@@ -168,7 +174,6 @@ def run_hotel_tests():
 
 if __name__ == "__main__":
     try:
-        # Malá pauza, aby se server stihl spustit, pokud ho pouštíte zároveň
         time.sleep(2)
         run_hotel_tests()
     except requests.exceptions.ConnectionError:

@@ -5,11 +5,15 @@ from datetime import timedelta
 
 from .. import crud, schemas
 from ..database import get_db
-from ..security import create_access_token, verify_password, settings
+from ..security import create_access_token, verify_password
+from ..config import settings
 
-router = APIRouter(tags=["Autentizace"])
+router = APIRouter(
+    prefix="/auth",
+    tags=["Autentizace"]
+)
 
-@router.post("/auth/token", response_model=schemas.Token)
+@router.post("/token", response_model=schemas.Token)
 async def login_for_access_token(db: AsyncSession = Depends(get_db), form_data: OAuth2PasswordRequestForm = Depends()):
     user = await crud.get_user_by_email(db, email=form_data.username)
     if not user or not verify_password(form_data.password, user.hashed_password):

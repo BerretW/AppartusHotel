@@ -3,10 +3,13 @@ python-multipart
 uvicorn[standard]
 sqlalchemy[asyncio]
 asyncmy
-pydantic[email]
+passlib>=1.7.4
+bcrypt==3.2.0
+pydantic==2.9.2
+pydantic[email]==2.9.2
 pydantic-settings
 python-dotenv
-passlib[bcrypt]
+
 python-jose[cryptography]
 alembic
 requests

@@ -3,19 +3,18 @@ from contextlib import asynccontextmanager
 
 # Importujeme všechny potřebné routery
 from .routers import auth, users, tasks, rooms, inventory
-
-# Importujeme klíčové objekty pro práci s databází
-from .database import Base, engine
+from .database import get_db
+from . import crud
 
 # Funkce, která se spustí při startu a ukončení aplikace
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Kód zde se spustí PŘED startem aplikace
-    print("Aplikace startuje, připravuji databázi...")
-    async with engine.begin() as conn:
-        # Vytvoří všechny tabulky definované v modelech, pokud neexistují
-        await conn.run_sync(Base.metadata.create_all)
-    print("Databáze je připravena.")
+    print("Aplikace startuje...")
+    # Zajistíme existenci Centrálního skladu při startu
+    async for db in get_db():
+        await crud.get_or_create_central_storage(db)
+        print("Ověřena existence Centrálního skladu.")
     
     yield # Zde běží samotná aplikace
     
@@ -27,7 +26,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Hotel Management API",
     description="Kompletní API pro správu hotelu.",
-    version="1.2.0 (bez Alembic)",
+    version="2.0.0 (s Alembic a plnou funkcionalitou)",
     lifespan=lifespan
 )
 

@@ -11,10 +11,9 @@ class UserBase(BaseModel):
     email: EmailStr
 
 class UserCreate(UserBase):
-    password: str
+    password: str = Field(..., min_length=8)
     role: UserRole
 
-# Definuje, jak vypadá uživatel, když ho posíláme z databáze ven (bez hesla)
 class UserInDB(UserBase):
     id: int
     role: UserRole
@@ -41,7 +40,7 @@ class TaskUpdateStatus(BaseModel):
     
 class Task(TaskBase):
     id: int
-    due_date: datetime
+    due_date: date
     status: TaskStatus
     assignee_id: int
 
@@ -66,7 +65,7 @@ class RoomUpdateStatus(BaseModel):
 class Room(RoomBase):
     id: int
     status: RoomStatus
-    location_id: Optional[int] = None
+    location_id: int
 
     class Config:
         from_attributes = True
@@ -108,22 +107,32 @@ class Location(BaseModel):
     class Config:
         from_attributes = True
 
-class ReceiptItem(BaseModel):
+class ReceiptItemCreate(BaseModel):
     item_id: int
     quantity: int = Field(..., gt=0) # Množství musí být větší než 0
 
+class ReceiptItem(ReceiptItemCreate):
+     class Config:
+        from_attributes = True
+
 class ReceiptDocumentCreate(BaseModel):
     supplier: str
+    items: List[ReceiptItemCreate]
+
+class ReceiptDocument(BaseModel):
+    id: int
+    supplier: str
+    created_at: datetime
     items: List[ReceiptItem]
+
+    class Config:
+        from_attributes = True
 
 class StockTransfer(BaseModel):
     item_id: int
     quantity: int = Field(..., gt=0)
     source_location_id: int
     destination_location_id: int
-
-class ConsumptionLog(BaseModel):
-    items: List[ReceiptItem]
 
 # ===================================================================
 # Schémata pro Autentizaci

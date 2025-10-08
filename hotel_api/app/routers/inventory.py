@@ -4,26 +4,35 @@ from typing import List
 
 from .. import crud, models, schemas
 from ..database import get_db
-from ..dependencies import is_admin_or_manager, is_storekeeper
+from ..dependencies import is_admin_or_manager, is_storekeeper_or_manager
 
 router = APIRouter(prefix="/inventory", tags=["Sklad"])
 
 @router.post("/items/", response_model=schemas.InventoryItem, status_code=201, dependencies=[Depends(is_admin_or_manager)])
 async def create_inventory_item(item: schemas.InventoryItemCreate, db: AsyncSession = Depends(get_db)):
+    """Vytvoří novou skladovou položku (master data)."""
     return await crud.create_inventory_item(db=db, item=item)
 
-@router.post("/stock/add", dependencies=[Depends(is_storekeeper)])
-async def add_stock(item: schemas.StockBase, db: AsyncSession = Depends(get_db)):
-    # Jednoduché přidání na sklad, ideálně by bylo součástí Příjemky
-    await crud.add_stock(db, item_id=item.item_id, location_id=1, quantity=item.quantity) # Příklad: lokace 1 = Centrální sklad
-    return {"message": "Zásoba byla úspěšně navýšena."}
+@router.get("/locations/", response_model=List[schemas.Location])
+async def get_all_locations(db: AsyncSession = Depends(get_db)):
+    """Vrátí seznam všech skladových lokací."""
+    return await crud.get_locations(db)
 
-@router.post("/stock/transfer")
+@router.post("/receipts/", response_model=schemas.ReceiptDocument, status_code=201, dependencies=[Depends(is_storekeeper_or_manager)])
+async def create_receipt(receipt: schemas.ReceiptDocumentCreate, db: AsyncSession = Depends(get_db)):
+    """Vytvoří příjemku a automaticky naskladní položky do centrálního skladu."""
+    return await crud.create_receipt(db=db, receipt_data=receipt)
+
+@router.post("/stock/transfer", dependencies=[Depends(is_storekeeper_or_manager)])
 async def transfer_stock_between_locations(transfer_data: schemas.StockTransfer, db: AsyncSession = Depends(get_db)):
+    """Přesune zadané množství položky z jedné lokace do druhé."""
+    if transfer_data.source_location_id == transfer_data.destination_location_id:
+        raise HTTPException(status_code=400, detail="Zdrojová a cílová lokace nemohou být stejné.")
     await crud.transfer_stock(db, transfer_data)
     return {"message": "Přesun zásob byl úspěšně proveden."}
 
 @router.get("/locations/{location_id}/stock", response_model=List[schemas.Stock])
 async def get_stock_at_location(location_id: int, db: AsyncSession = Depends(get_db)):
+    """Získá aktuální stav zásob pro danou lokaci."""
     stock_list = await crud.get_stock_by_location(db, location_id=location_id)
     return stock_list
