@@ -6,7 +6,7 @@ from . import models, schemas
 from .security import get_password_hash
 from datetime import date, datetime, timedelta
 from fastapi import HTTPException
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 # --- CRUD pro Uživatele (Users) ---
 async def get_user_by_email(db: AsyncSession, email: str):
@@ -254,6 +254,39 @@ async def create_reservation(db: AsyncSession, res_data: schemas.PublicReservati
     await db.commit()
     await db.refresh(db_reservation, attribute_names=['room', 'guest'])
     return db_reservation
+
+# +++ PŘIDANÁ FUNKCE +++
+async def get_reservations(db: AsyncSession, start_date: date, end_date: date, room_id: Optional[int] = None, status: Optional[str] = None) -> List[models.Reservation]:
+    """
+    Získá seznam rezervací s možností filtrace podle data, pokoje a statusu.
+    """
+    query = (
+        select(models.Reservation)
+        .options(
+            selectinload(models.Reservation.room),
+            selectinload(models.Reservation.guest)
+        )
+        .filter(
+            models.Reservation.check_in_date <= end_date,
+            models.Reservation.check_out_date >= start_date
+        )
+        .order_by(models.Reservation.check_in_date)
+    )
+
+    if room_id:
+        query = query.filter(models.Reservation.room_id == room_id)
+
+    if status:
+        try:
+            status_enum = models.ReservationStatus(status)
+            query = query.filter(models.Reservation.status == status_enum)
+        except ValueError:
+            # Pokud je status neplatný, vrátíme prázdný seznam, aby se frontend nerozbil
+            return []
+
+    result = await db.execute(query)
+    return result.scalars().all()
+# +++ KONEC PŘIDANÉ FUNKCE +++
 
 async def update_reservation(db: AsyncSession, reservation_id: int, res_update: schemas.ReservationUpdate):
     db_res = await db.get(models.Reservation, reservation_id)
