@@ -1,10 +1,12 @@
+# FILE: hotel_api/app/crud.py
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, joinedload
 from . import models, schemas
 from .security import get_password_hash
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from fastapi import HTTPException
+from typing import List
 
 # ===================================================================
 # CRUD pro Uživatele (Users)
@@ -17,6 +19,13 @@ async def get_user_by_email(db: AsyncSession, email: str):
 async def get_user_count(db: AsyncSession) -> int:
     result = await db.execute(select(func.count(models.User.id)))
     return result.scalar_one()
+
+async def get_employees(db: AsyncSession):
+    """Získá seznam uživatelů s rolemi zaměstnanců."""
+    employee_roles = [models.UserRole.uklizecka, models.UserRole.skladnik, models.UserRole.recepcni, models.UserRole.spravce]
+    query = select(models.User).filter(models.User.role.in_(employee_roles))
+    result = await db.execute(query)
+    return result.scalars().all()
 
 async def create_user(db: AsyncSession, user: schemas.UserCreate):
     hashed_password = get_password_hash(user.password)
@@ -31,7 +40,7 @@ async def create_user(db: AsyncSession, user: schemas.UserCreate):
     return db_user
 
 # ===================================================================
-# CRUD pro Úkoly (Tasks)
+# CRUD pro Úkoly (Tasks) - CHYBĚJÍCÍ SEKCE
 # ===================================================================
 
 async def get_task_by_id(db: AsyncSession, task_id: int):
@@ -64,7 +73,6 @@ async def create_task(db: AsyncSession, task: schemas.TaskCreate):
 # ===================================================================
 
 async def get_or_create_central_storage(db: AsyncSession):
-    """Najde nebo vytvoří Centrální sklad."""
     result = await db.execute(select(models.Location).filter(models.Location.name == "Centrální sklad"))
     storage = result.scalars().first()
     if not storage:
@@ -75,13 +83,23 @@ async def get_or_create_central_storage(db: AsyncSession):
     return storage
 
 async def create_room(db: AsyncSession, room: schemas.RoomCreate):
-    # Nejprve vytvoříme lokaci pro minibar
     minibar_location = models.Location(name=f"Minibar Pokoje {room.number}")
     db.add(minibar_location)
-    await db.flush() # Potřebujeme ID pro pokoj
+    await db.flush()
 
     db_room = models.Room(**room.dict(), location_id=minibar_location.id)
     db.add(db_room)
+    await db.commit()
+    await db.refresh(db_room)
+    return db_room
+
+async def update_room(db: AsyncSession, room_id: int, room_update: schemas.RoomUpdate):
+    db_room = await db.get(models.Room, room_id)
+    if not db_room:
+        return None
+    update_data = room_update.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_room, key, value)
     await db.commit()
     await db.refresh(db_room)
     return db_room
@@ -100,6 +118,12 @@ async def get_rooms(db: AsyncSession, status: schemas.RoomStatus = None, skip: i
 # ===================================================================
 # CRUD pro Sklad (Inventory)
 # ===================================================================
+
+async def get_inventory_items(db: AsyncSession, skip: int = 0, limit: int = 100):
+    """Vrátí seznam všech master skladových položek."""
+    query = select(models.InventoryItem).offset(skip).limit(limit)
+    result = await db.execute(query)
+    return result.scalars().all()
 
 async def create_inventory_item(db: AsyncSession, item: schemas.InventoryItemCreate):
     db_item = models.InventoryItem(**item.dict())
@@ -125,7 +149,7 @@ async def add_stock(db: AsyncSession, item_id: int, location_id: int, quantity: 
     else:
         stock_entry = models.Stock(item_id=item_id, location_id=location_id, quantity=quantity)
         db.add(stock_entry)
-    await db.flush() # Použijeme flush místo commit, aby se operace stala součástí větší transakce
+    await db.flush()
     return stock_entry
 
 async def remove_stock(db: AsyncSession, item_id: int, location_id: int, quantity: int):
@@ -133,11 +157,10 @@ async def remove_stock(db: AsyncSession, item_id: int, location_id: int, quantit
     if not stock_entry or stock_entry.quantity < quantity:
         raise HTTPException(status_code=400, detail=f"Nedostatek polozky ID {item_id} v lokaci ID {location_id}")
     stock_entry.quantity -= quantity
-    await db.flush() # Použijeme flush místo commit
+    await db.flush()
     return stock_entry
 
 async def transfer_stock(db: AsyncSession, transfer_data: schemas.StockTransfer):
-    # session handleuje transakci automaticky
     try:
         await remove_stock(db, transfer_data.item_id, transfer_data.source_location_id, transfer_data.quantity)
         await add_stock(db, transfer_data.item_id, transfer_data.destination_location_id, transfer_data.quantity)
@@ -145,7 +168,7 @@ async def transfer_stock(db: AsyncSession, transfer_data: schemas.StockTransfer)
     except Exception as e:
         await db.rollback()
         raise e
-    
+
 async def get_stock_by_location(db: AsyncSession, location_id: int):
     result = await db.execute(
         select(models.Stock)
@@ -155,31 +178,169 @@ async def get_stock_by_location(db: AsyncSession, location_id: int):
     return result.scalars().all()
 
 async def create_receipt(db: AsyncSession, receipt_data: schemas.ReceiptDocumentCreate):
-    """Zpracuje příjemku a navýší zásoby v centrálním skladu."""
     central_storage = await get_or_create_central_storage(db)
-    
     db_receipt = models.Receipt(supplier=receipt_data.supplier)
     db.add(db_receipt)
     await db.flush()
 
     try:
         for item_in in receipt_data.items:
-            # Přidání položek na sklad
             await add_stock(db, item_id=item_in.item_id, location_id=central_storage.id, quantity=item_in.quantity)
-            
-            # Vytvoření záznamu o položce na příjemce
             db_receipt_item = models.ReceiptItem(
                 receipt_id=db_receipt.id,
                 item_id=item_in.item_id,
                 quantity=item_in.quantity
             )
             db.add(db_receipt_item)
-        
         await db.commit()
         await db.refresh(db_receipt)
-        # Načteme i související položky pro plnou odpověď
         await db.refresh(db_receipt, attribute_names=['items'])
         return db_receipt
     except Exception as e:
         await db.rollback()
         raise e
+
+# ===================================================================
+# CRUD pro Rezervace a Hosty (Reservations & Guests)
+# ===================================================================
+
+async def get_or_create_guest(db: AsyncSession, name: str, email: str):
+    result = await db.execute(select(models.Guest).filter(models.Guest.email == email))
+    guest = result.scalars().first()
+    if not guest:
+        guest = models.Guest(name=name, email=email)
+        db.add(guest)
+        await db.commit()
+        await db.refresh(guest)
+    return guest
+
+async def create_reservation(db: AsyncSession, res_data: schemas.ReservationCreate):
+    guest = await get_or_create_guest(db, name=res_data.guest_name, email=res_data.guest_email)
+    room = await db.get(models.Room, res_data.room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Pokoj nebyl nalezen.")
+
+    num_nights = (res_data.check_out_date - res_data.check_in_date).days
+    total_price = num_nights * (room.price_per_night or 0)
+
+    db_reservation = models.Reservation(
+        room_id=res_data.room_id,
+        guest_id=guest.id,
+        check_in_date=res_data.check_in_date,
+        check_out_date=res_data.check_out_date,
+        total_price=total_price
+    )
+    db.add(db_reservation)
+    await db.commit()
+    await db.refresh(db_reservation)
+    return db_reservation
+
+async def get_reservations(db: AsyncSession, start_date: date, end_date: date, room_id: int = None, status: str = None):
+    query = select(models.Reservation).options(
+        joinedload(models.Reservation.room),
+        joinedload(models.Reservation.guest)
+    ).filter(
+        models.Reservation.check_in_date <= end_date,
+        models.Reservation.check_out_date >= start_date
+    )
+    if room_id:
+        query = query.filter(models.Reservation.room_id == room_id)
+    if status:
+        query = query.filter(models.Reservation.status == status)
+
+    result = await db.execute(query)
+    return result.scalars().all()
+
+async def perform_check_in(db: AsyncSession, reservation_id: int):
+    reservation = await db.get(models.Reservation, reservation_id, options=[joinedload(models.Reservation.room)])
+    if not reservation:
+        raise HTTPException(status_code=404, detail="Rezervace nenalezena.")
+
+    reservation.status = models.ReservationStatus.ubytovan
+    reservation.room.status = models.RoomStatus.occupied
+    await db.commit()
+    await db.refresh(reservation)
+    return reservation
+
+async def perform_check_out(db: AsyncSession, reservation_id: int):
+    reservation = await db.get(models.Reservation, reservation_id, options=[joinedload(models.Reservation.room)])
+    if not reservation:
+        raise HTTPException(status_code=404, detail="Rezervace nenalezena.")
+
+    reservation.status = models.ReservationStatus.odhlasen
+    reservation.room.status = models.RoomStatus.available_dirty
+    await db.commit()
+    await db.refresh(reservation)
+    return reservation
+
+# ===================================================================
+# CRUD pro Účtování (Billing)
+# ===================================================================
+
+async def add_charge_to_room(db: AsyncSession, room_id: int, charge_data: schemas.RoomChargeCreate):
+    res = await db.execute(
+        select(models.Reservation)
+        .filter_by(room_id=room_id, status=models.ReservationStatus.ubytovan)
+    )
+    reservation = res.scalars().first()
+    if not reservation:
+        raise HTTPException(status_code=400, detail="Pro tento pokoj neexistuje žádná aktivní (ubytovaná) rezervace.")
+
+    item = await db.get(models.InventoryItem, charge_data.item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Skladová položka nenalezena.")
+
+    room = await db.get(models.Room, room_id)
+    await remove_stock(db, item_id=item.id, location_id=room.location_id, quantity=charge_data.quantity)
+
+    total_price = item.price * charge_data.quantity
+    db_charge = models.RoomCharge(
+        reservation_id=reservation.id,
+        item_id=item.id,
+        quantity=charge_data.quantity,
+        price_per_item=item.price,
+        total_price=total_price
+    )
+    db.add(db_charge)
+    await db.commit()
+    await db.refresh(db_charge)
+    return db_charge
+
+async def get_bill_for_reservation(db: AsyncSession, reservation_id: int) -> schemas.Bill:
+    res = await db.execute(
+        select(models.Reservation).options(
+            joinedload(models.Reservation.room),
+            joinedload(models.Reservation.guest),
+            joinedload(models.Reservation.charges).joinedload(models.RoomCharge.item),
+            joinedload(models.Reservation.payments)
+        ).filter(models.Reservation.id == reservation_id)
+    )
+    reservation = res.scalars().first()
+    if not reservation:
+        raise HTTPException(status_code=404, detail="Rezervace nenalezena.")
+
+    total_charges = sum(c.total_price for c in reservation.charges) + (reservation.total_price or 0)
+    total_paid = sum(p.amount for p in reservation.payments)
+
+    return schemas.Bill(
+        reservation_details=reservation,
+        charges=reservation.charges,
+        total_due=total_charges,
+        total_paid=total_paid,
+        balance=total_charges - total_paid
+    )
+
+async def record_payment(db: AsyncSession, reservation_id: int, payment_data: schemas.PaymentCreate):
+    reservation = await db.get(models.Reservation, reservation_id)
+    if not reservation:
+        raise HTTPException(status_code=404, detail="Rezervace nenalezena.")
+
+    db_payment = models.Payment(
+        reservation_id=reservation_id,
+        amount=payment_data.amount,
+        method=payment_data.method
+    )
+    db.add(db_payment)
+    await db.commit()
+    await db.refresh(db_payment)
+    return db_payment

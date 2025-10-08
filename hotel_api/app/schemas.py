@@ -1,7 +1,8 @@
+# FILE: hotel_api/app/schemas.py
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List
 from datetime import date, datetime
-from .models import UserRole, TaskStatus, RoomStatus
+from .models import UserRole, TaskStatus, RoomStatus, ReservationStatus
 
 # ===================================================================
 # Schémata pro Uživatele
@@ -19,6 +20,14 @@ class UserInDB(UserBase):
     role: UserRole
     is_active: bool
 
+    class Config:
+        from_attributes = True
+
+class Employee(BaseModel):
+    id: int
+    email: EmailStr
+    role: UserRole
+    
     class Config:
         from_attributes = True
 
@@ -55,9 +64,15 @@ class RoomBase(BaseModel):
     number: str
     type: str = "Standard"
     capacity: int = 2
+    price_per_night: Optional[float] = None
 
 class RoomCreate(RoomBase):
     pass
+
+class RoomUpdate(BaseModel):
+    type: Optional[str] = None
+    capacity: Optional[int] = None
+    price_per_night: Optional[float] = None
 
 class RoomUpdateStatus(BaseModel):
     status: RoomStatus
@@ -95,7 +110,7 @@ class StockBase(BaseModel):
 class Stock(StockBase):
     id: int
     location_id: int
-    item: InventoryItem # Zobrazí celé info o položce
+    item: InventoryItem
 
     class Config:
         from_attributes = True
@@ -109,7 +124,7 @@ class Location(BaseModel):
 
 class ReceiptItemCreate(BaseModel):
     item_id: int
-    quantity: int = Field(..., gt=0) # Množství musí být větší než 0
+    quantity: int = Field(..., gt=0)
 
 class ReceiptItem(ReceiptItemCreate):
      class Config:
@@ -133,6 +148,65 @@ class StockTransfer(BaseModel):
     quantity: int = Field(..., gt=0)
     source_location_id: int
     destination_location_id: int
+
+# ===================================================================
+# Schémata pro Rezervace a Účtování
+# ===================================================================
+
+class GuestBase(BaseModel):
+    name: str
+    email: EmailStr
+    phone: Optional[str] = None
+
+class GuestCreate(GuestBase):
+    pass
+
+class Guest(GuestBase):
+    id: int
+    class Config:
+        from_attributes = True
+
+class ReservationCreate(BaseModel):
+    room_id: int
+    guest_name: str
+    guest_email: EmailStr
+    check_in_date: date
+    check_out_date: date
+
+class Reservation(BaseModel):
+    id: int
+    check_in_date: date
+    check_out_date: date
+    status: ReservationStatus
+    room: Room
+    guest: Guest
+    
+    class Config:
+        from_attributes = True
+
+class RoomChargeCreate(BaseModel):
+    item_id: int
+    quantity: int = Field(..., gt=0)
+
+class RoomCharge(BaseModel):
+    id: int
+    item: InventoryItem
+    quantity: int
+    total_price: float
+    charged_at: datetime
+    class Config:
+        from_attributes = True
+
+class PaymentCreate(BaseModel):
+    amount: float = Field(..., gt=0)
+    method: str # "hotovost" | "karta"
+
+class Bill(BaseModel):
+    reservation_details: Reservation
+    charges: List[RoomCharge]
+    total_due: float
+    total_paid: float
+    balance: float
 
 # ===================================================================
 # Schémata pro Autentizaci

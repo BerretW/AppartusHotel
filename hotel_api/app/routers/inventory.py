@@ -1,22 +1,33 @@
+# FILE: hotel_api/app/routers/inventory.py
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 
 from .. import crud, models, schemas
 from ..database import get_db
-from ..dependencies import is_admin_or_manager, is_storekeeper_or_manager
+from ..dependencies import is_admin_or_manager, is_storekeeper_or_manager, get_current_active_user
 
 router = APIRouter(prefix="/inventory", tags=["Sklad"])
 
 @router.post("/items/", response_model=schemas.InventoryItem, status_code=201, dependencies=[Depends(is_admin_or_manager)])
 async def create_inventory_item(item: schemas.InventoryItemCreate, db: AsyncSession = Depends(get_db)):
-    """Vytvoří novou skladovou položku (master data)."""
     return await crud.create_inventory_item(db=db, item=item)
+
+# --- NOVÝ ENDPOINT ---
+@router.get("/items/", response_model=List[schemas.InventoryItem], dependencies=[Depends(get_current_active_user)])
+async def get_all_inventory_items(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
+    """
+    Vrátí seznam všech "master" skladových položek.
+    Vyžaduje přihlášení.
+    """
+    items = await crud.get_inventory_items(db, skip=skip, limit=limit)
+    return items
 
 @router.get("/locations/", response_model=List[schemas.Location])
 async def get_all_locations(db: AsyncSession = Depends(get_db)):
-    """Vrátí seznam všech skladových lokací."""
     return await crud.get_locations(db)
+
+
 
 @router.post("/receipts/", response_model=schemas.ReceiptDocument, status_code=201, dependencies=[Depends(is_storekeeper_or_manager)])
 async def create_receipt(receipt: schemas.ReceiptDocumentCreate, db: AsyncSession = Depends(get_db)):

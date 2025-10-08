@@ -8,7 +8,7 @@ timestamp = int(time.time())
 ADMIN_EMAIL = f"admin.{timestamp}@hotel.com"
 HOUSEKEEPER_EMAIL = f"uklizecka.{timestamp}@hotel.com"
 STOREKEEPER_EMAIL = f"skladnik.{timestamp}@hotel.com"
-ADMIN_PASSWORD = "admin_password"
+ADMIN_PASSWORD = "1234"
 USER_PASSWORD = "password123"
 
 # Globální proměnné, které budeme postupně naplňovat

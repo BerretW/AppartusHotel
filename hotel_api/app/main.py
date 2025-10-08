@@ -2,11 +2,20 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 
 # Importujeme všechny potřebné routery
+# Přidáno 'reservations'
+from .routers import auth, users, tasks, rooms, inventory, reservations
+from .database import get_db
+from . import crud
+from fastapi.middleware.cors import CORSMiddleware
+
+# Importujeme všechny potřebné routery
 from .routers import auth, users, tasks, rooms, inventory
 from .database import get_db
 from . import crud
 
 # Funkce, která se spustí při startu a ukončení aplikace
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Kód zde se spustí PŘED startem aplikace
@@ -15,9 +24,9 @@ async def lifespan(app: FastAPI):
     async for db in get_db():
         await crud.get_or_create_central_storage(db)
         print("Ověřena existence Centrálního skladu.")
-    
-    yield # Zde běží samotná aplikace
-    
+
+    yield  # Zde běží samotná aplikace
+
     # Kód zde se spustí PO ukončení aplikace
     print("Aplikace se ukončuje.")
 
@@ -30,12 +39,24 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+origins = ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 # Propojení jednotlivých routerů
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(tasks.router)
 app.include_router(rooms.router)
 app.include_router(inventory.router)
+app.include_router(reservations.router) # Přidán nový router
+
 
 @app.get("/", tags=["Root"])
 async def read_root():

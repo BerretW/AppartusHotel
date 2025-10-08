@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import List
 from .. import crud, schemas, models
 from ..database import get_db
 from ..dependencies import is_admin_or_manager, get_current_user
@@ -49,3 +50,10 @@ async def create_user_by_admin(user: schemas.UserCreate, db: AsyncSession = Depe
 async def read_users_me(current_user: models.User = Depends(get_current_user)):
     """Vrátí informace o aktuálně přihlášeném uživateli."""
     return current_user
+@router.get("/employees/", response_model=List[schemas.Employee], dependencies=[Depends(is_admin_or_manager)])
+async def get_employees_list(db: AsyncSession = Depends(get_db)):
+    """
+    Vrátí seznam uživatelů, kteří jsou zaměstnanci (uklizecka, skladnik, recepcni, spravce).
+    Vyžaduje oprávnění 'majitel' nebo 'spravce'.
+    """
+    return await crud.get_employees(db)

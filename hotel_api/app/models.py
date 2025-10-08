@@ -1,3 +1,4 @@
+# FILE: hotel_api/app/models.py
 from sqlalchemy import Column, Integer, String, Enum as SQLAlchemyEnum, ForeignKey, DateTime, Boolean, Float, Date
 from sqlalchemy.orm import relationship
 from .database import Base
@@ -26,6 +27,12 @@ class RoomStatus(str, enum.Enum):
     occupied = "Obsazeno"
     cleaning_in_progress = "Probíhá úklid"
     under_maintenance = "V údržbě"
+
+class ReservationStatus(str, enum.Enum):
+    potvrzeno = "potvrzeno"
+    ubytovan = "ubytován"
+    odhlasen = "odhlášen"
+    zruseno = "zrušeno"
 
 # --- Modely Tabulek ---
 
@@ -56,10 +63,12 @@ class Room(Base):
     number = Column(String(10), unique=True, index=True, nullable=False)
     type = Column(String(100), nullable=False, default="Standard")
     capacity = Column(Integer, default=2)
+    price_per_night = Column(Float, default=1000.0) # Nové pole
     status = Column(SQLAlchemyEnum(RoomStatus), default=RoomStatus.available_clean)
     
     location_id = Column(Integer, ForeignKey("locations.id"))
     location = relationship("Location", back_populates="room")
+    reservations = relationship("Reservation", back_populates="room")
 
 class Location(Base):
     __tablename__ = "locations"
@@ -105,3 +114,54 @@ class ReceiptItem(Base):
     
     receipt = relationship("Receipt", back_populates="items")
     item = relationship("InventoryItem")
+
+# --- NOVÉ MODELY PRO REZERVACE A ÚČTOVÁNÍ ---
+
+class Guest(Base):
+    __tablename__ = "guests"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    phone = Column(String(50), nullable=True)
+    
+    reservations = relationship("Reservation", back_populates="guest")
+
+class Reservation(Base):
+    __tablename__ = "reservations"
+    id = Column(Integer, primary_key=True, index=True)
+    check_in_date = Column(Date, nullable=False)
+    check_out_date = Column(Date, nullable=False)
+    status = Column(SQLAlchemyEnum(ReservationStatus), default=ReservationStatus.potvrzeno)
+    total_price = Column(Float, nullable=True)
+    
+    room_id = Column(Integer, ForeignKey("rooms.id"), nullable=False)
+    guest_id = Column(Integer, ForeignKey("guests.id"), nullable=False)
+    
+    room = relationship("Room", back_populates="reservations")
+    guest = relationship("Guest", back_populates="reservations")
+    charges = relationship("RoomCharge", back_populates="reservation")
+    payments = relationship("Payment", back_populates="reservation")
+
+class RoomCharge(Base):
+    __tablename__ = "room_charges"
+    id = Column(Integer, primary_key=True, index=True)
+    quantity = Column(Integer, nullable=False)
+    price_per_item = Column(Float, nullable=False)
+    total_price = Column(Float, nullable=False)
+    charged_at = Column(DateTime, default=datetime.utcnow)
+    
+    item_id = Column(Integer, ForeignKey("inventory_items.id"), nullable=False)
+    reservation_id = Column(Integer, ForeignKey("reservations.id"), nullable=False)
+    
+    item = relationship("InventoryItem")
+    reservation = relationship("Reservation", back_populates="charges")
+
+class Payment(Base):
+    __tablename__ = "payments"
+    id = Column(Integer, primary_key=True, index=True)
+    amount = Column(Float, nullable=False)
+    method = Column(String(50), nullable=False) # "cash", "card"
+    paid_at = Column(DateTime, default=datetime.utcnow)
+    
+    reservation_id = Column(Integer, ForeignKey("reservations.id"), nullable=False)
+    reservation = relationship("Reservation", back_populates="payments")
