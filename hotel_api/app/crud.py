@@ -1,17 +1,14 @@
 # FILE: hotel_api/app/crud.py
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, func
+from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload, joinedload
 from . import models, schemas
 from .security import get_password_hash
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from fastapi import HTTPException
 from typing import List
 
-# ===================================================================
-# CRUD pro Uživatele (Users)
-# ===================================================================
-
+# --- CRUD pro Uživatele (Users) ---
 async def get_user_by_email(db: AsyncSession, email: str):
     result = await db.execute(select(models.User).filter(models.User.email == email))
     return result.scalars().first()
@@ -21,7 +18,6 @@ async def get_user_count(db: AsyncSession) -> int:
     return result.scalar_one()
 
 async def get_employees(db: AsyncSession):
-    """Získá seznam uživatelů s rolemi zaměstnanců."""
     employee_roles = [models.UserRole.uklizecka, models.UserRole.skladnik, models.UserRole.recepcni, models.UserRole.spravce]
     query = select(models.User).filter(models.User.role.in_(employee_roles))
     result = await db.execute(query)
@@ -29,20 +25,13 @@ async def get_employees(db: AsyncSession):
 
 async def create_user(db: AsyncSession, user: schemas.UserCreate):
     hashed_password = get_password_hash(user.password)
-    db_user = models.User(
-        email=user.email,
-        hashed_password=hashed_password,
-        role=user.role
-    )
+    db_user = models.User(email=user.email, hashed_password=hashed_password, role=user.role)
     db.add(db_user)
     await db.commit()
     await db.refresh(db_user)
     return db_user
 
-# ===================================================================
-# CRUD pro Úkoly (Tasks) - CHYBĚJÍCÍ SEKCE
-# ===================================================================
-
+# --- CRUD pro Úkoly (Tasks) ---
 async def get_task_by_id(db: AsyncSession, task_id: int):
     result = await db.execute(select(models.Task).filter(models.Task.id == task_id))
     return result.scalars().first()
@@ -57,21 +46,20 @@ async def get_tasks_for_user(db: AsyncSession, user_id: int, start_date: date, e
     return result.scalars().all()
 
 async def create_task(db: AsyncSession, task: schemas.TaskCreate):
+    # --- Klíčová definice ---
     db_task = models.Task(
         title=task.title,
         notes=task.notes,
         assignee_id=task.assignee_id,
-        due_date=task.due_date
+        due_date=task.due_date,
+        room_id=task.room_id
     )
     db.add(db_task)
     await db.commit()
     await db.refresh(db_task)
     return db_task
 
-# ===================================================================
-# CRUD pro Pokoje (Rooms)
-# ===================================================================
-
+# --- CRUD pro Pokoje (Rooms) ---
 async def get_or_create_central_storage(db: AsyncSession):
     result = await db.execute(select(models.Location).filter(models.Location.name == "Centrální sklad"))
     storage = result.scalars().first()
@@ -86,7 +74,6 @@ async def create_room(db: AsyncSession, room: schemas.RoomCreate):
     minibar_location = models.Location(name=f"Minibar Pokoje {room.number}")
     db.add(minibar_location)
     await db.flush()
-
     db_room = models.Room(**room.dict(), location_id=minibar_location.id)
     db.add(db_room)
     await db.commit()
@@ -95,8 +82,7 @@ async def create_room(db: AsyncSession, room: schemas.RoomCreate):
 
 async def update_room(db: AsyncSession, room_id: int, room_update: schemas.RoomUpdate):
     db_room = await db.get(models.Room, room_id)
-    if not db_room:
-        return None
+    if not db_room: return None
     update_data = room_update.dict(exclude_unset=True)
     for key, value in update_data.items():
         setattr(db_room, key, value)
@@ -115,12 +101,8 @@ async def get_rooms(db: AsyncSession, status: schemas.RoomStatus = None, skip: i
     result = await db.execute(query)
     return result.scalars().all()
 
-# ===================================================================
-# CRUD pro Sklad (Inventory)
-# ===================================================================
-
+# --- CRUD pro Sklad (Inventory) ---
 async def get_inventory_items(db: AsyncSession, skip: int = 0, limit: int = 100):
-    """Vrátí seznam všech master skladových položek."""
     query = select(models.InventoryItem).offset(skip).limit(limit)
     result = await db.execute(query)
     return result.scalars().all()
@@ -137,15 +119,12 @@ async def get_locations(db: AsyncSession):
     return result.scalars().all()
 
 async def get_stock_entry(db: AsyncSession, item_id: int, location_id: int):
-    result = await db.execute(
-        select(models.Stock).filter_by(item_id=item_id, location_id=location_id)
-    )
+    result = await db.execute(select(models.Stock).filter_by(item_id=item_id, location_id=location_id))
     return result.scalars().first()
 
 async def add_stock(db: AsyncSession, item_id: int, location_id: int, quantity: int):
     stock_entry = await get_stock_entry(db, item_id, location_id)
-    if stock_entry:
-        stock_entry.quantity += quantity
+    if stock_entry: stock_entry.quantity += quantity
     else:
         stock_entry = models.Stock(item_id=item_id, location_id=location_id, quantity=quantity)
         db.add(stock_entry)
@@ -170,11 +149,7 @@ async def transfer_stock(db: AsyncSession, transfer_data: schemas.StockTransfer)
         raise e
 
 async def get_stock_by_location(db: AsyncSession, location_id: int):
-    result = await db.execute(
-        select(models.Stock)
-        .options(selectinload(models.Stock.item))
-        .filter(models.Stock.location_id == location_id)
-    )
+    result = await db.execute(select(models.Stock).options(selectinload(models.Stock.item)).filter(models.Stock.location_id == location_id))
     return result.scalars().all()
 
 async def create_receipt(db: AsyncSession, receipt_data: schemas.ReceiptDocumentCreate):
@@ -182,15 +157,10 @@ async def create_receipt(db: AsyncSession, receipt_data: schemas.ReceiptDocument
     db_receipt = models.Receipt(supplier=receipt_data.supplier)
     db.add(db_receipt)
     await db.flush()
-
     try:
         for item_in in receipt_data.items:
             await add_stock(db, item_id=item_in.item_id, location_id=central_storage.id, quantity=item_in.quantity)
-            db_receipt_item = models.ReceiptItem(
-                receipt_id=db_receipt.id,
-                item_id=item_in.item_id,
-                quantity=item_in.quantity
-            )
+            db_receipt_item = models.ReceiptItem(receipt_id=db_receipt.id, item_id=item_in.item_id, quantity=item_in.quantity)
             db.add(db_receipt_item)
         await db.commit()
         await db.refresh(db_receipt)
@@ -200,10 +170,7 @@ async def create_receipt(db: AsyncSession, receipt_data: schemas.ReceiptDocument
         await db.rollback()
         raise e
 
-# ===================================================================
-# CRUD pro Rezervace a Hosty (Reservations & Guests)
-# ===================================================================
-
+# --- CRUD pro Rezervace a Hosty (Reservations & Guests) ---
 async def get_or_create_guest(db: AsyncSession, name: str, email: str):
     result = await db.execute(select(models.Guest).filter(models.Guest.email == email))
     guest = result.scalars().first()
@@ -217,233 +184,138 @@ async def get_or_create_guest(db: AsyncSession, name: str, email: str):
 async def create_reservation(db: AsyncSession, res_data: schemas.ReservationCreate):
     guest = await get_or_create_guest(db, name=res_data.guest_name, email=res_data.guest_email)
     room = await db.get(models.Room, res_data.room_id)
-    if not room:
-        raise HTTPException(status_code=404, detail="Pokoj nebyl nalezen.")
-
+    if not room: raise HTTPException(status_code=404, detail="Pokoj nebyl nalezen.")
     num_nights = (res_data.check_out_date - res_data.check_in_date).days
     total_price = num_nights * (room.price_per_night or 0)
-
     db_reservation = models.Reservation(
-        room_id=res_data.room_id,
-        guest_id=guest.id,
-        check_in_date=res_data.check_in_date,
-        check_out_date=res_data.check_out_date,
-        total_price=total_price
+        room_id=res_data.room_id, guest_id=guest.id, check_in_date=res_data.check_in_date,
+        check_out_date=res_data.check_out_date, total_price=total_price
     )
     db.add(db_reservation)
     await db.commit()
-    await db.refresh(db_reservation)
+    await db.refresh(db_reservation, attribute_names=['room', 'guest'])
     return db_reservation
 
 async def get_reservations(db: AsyncSession, start_date: date, end_date: date, room_id: int = None, status: str = None):
-    query = select(models.Reservation).options(
-        joinedload(models.Reservation.room),
-        joinedload(models.Reservation.guest)
-    ).filter(
-        models.Reservation.check_in_date <= end_date,
-        models.Reservation.check_out_date >= start_date
+    query = select(models.Reservation).options(joinedload(models.Reservation.room), joinedload(models.Reservation.guest)).filter(
+        models.Reservation.check_in_date <= end_date, models.Reservation.check_out_date >= start_date
     )
-    if room_id:
-        query = query.filter(models.Reservation.room_id == room_id)
-    if status:
-        query = query.filter(models.Reservation.status == status)
-
+    if room_id: query = query.filter(models.Reservation.room_id == room_id)
+    if status: query = query.filter(models.Reservation.status == status)
     result = await db.execute(query)
     return result.scalars().all()
 
 async def perform_check_in(db: AsyncSession, reservation_id: int):
     reservation = await db.get(models.Reservation, reservation_id, options=[joinedload(models.Reservation.room)])
-    if not reservation:
-        raise HTTPException(status_code=404, detail="Rezervace nenalezena.")
-
+    if not reservation: raise HTTPException(status_code=404, detail="Rezervace nenalezena.")
     reservation.status = models.ReservationStatus.ubytovan
     reservation.room.status = models.RoomStatus.occupied
     await db.commit()
-    await db.refresh(reservation)
+    await db.refresh(reservation, attribute_names=['room', 'guest'])
     return reservation
 
 async def perform_check_out(db: AsyncSession, reservation_id: int):
     reservation = await db.get(models.Reservation, reservation_id, options=[joinedload(models.Reservation.room)])
-    if not reservation:
-        raise HTTPException(status_code=404, detail="Rezervace nenalezena.")
-
+    if not reservation: raise HTTPException(status_code=404, detail="Rezervace nenalezena.")
     reservation.status = models.ReservationStatus.odhlasen
     reservation.room.status = models.RoomStatus.available_dirty
     await db.commit()
-    await db.refresh(reservation)
+    await db.refresh(reservation, attribute_names=['room', 'guest'])
     return reservation
 
-# ===================================================================
-# CRUD pro Účtování (Billing)
-# ===================================================================
-
+# --- CRUD pro Účtování (Billing) ---
 async def add_charge_to_room(db: AsyncSession, room_id: int, charge_data: schemas.RoomChargeCreate):
-    res = await db.execute(
-        select(models.Reservation)
-        .filter_by(room_id=room_id, status=models.ReservationStatus.ubytovan)
-    )
+    res = await db.execute(select(models.Reservation).filter_by(room_id=room_id, status=models.ReservationStatus.ubytovan))
     reservation = res.scalars().first()
-    if not reservation:
-        raise HTTPException(status_code=400, detail="Pro tento pokoj neexistuje žádná aktivní (ubytovaná) rezervace.")
-
+    if not reservation: raise HTTPException(status_code=400, detail="Pro tento pokoj neexistuje žádná aktivní (ubytovaná) rezervace.")
     item = await db.get(models.InventoryItem, charge_data.item_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Skladová položka nenalezena.")
-
+    if not item: raise HTTPException(status_code=404, detail="Skladová položka nenalezena.")
     room = await db.get(models.Room, room_id)
     await remove_stock(db, item_id=item.id, location_id=room.location_id, quantity=charge_data.quantity)
-
     total_price = item.price * charge_data.quantity
     db_charge = models.RoomCharge(
-        reservation_id=reservation.id,
-        item_id=item.id,
-        quantity=charge_data.quantity,
-        price_per_item=item.price,
-        total_price=total_price
+        reservation_id=reservation.id, item_id=item.id, quantity=charge_data.quantity,
+        price_per_item=item.price, total_price=total_price
     )
     db.add(db_charge)
     await db.commit()
-    await db.refresh(db_charge)
+    await db.refresh(db_charge, attribute_names=['item'])
     return db_charge
 
 async def get_bill_for_reservation(db: AsyncSession, reservation_id: int) -> schemas.Bill:
-    res = await db.execute(
-        select(models.Reservation).options(
-            joinedload(models.Reservation.room),
-            joinedload(models.Reservation.guest),
-            joinedload(models.Reservation.charges).joinedload(models.RoomCharge.item),
-            joinedload(models.Reservation.payments)
-        ).filter(models.Reservation.id == reservation_id)
-    )
+    res = await db.execute(select(models.Reservation).options(
+        joinedload(models.Reservation.room), joinedload(models.Reservation.guest),
+        joinedload(models.Reservation.charges).joinedload(models.RoomCharge.item),
+        joinedload(models.Reservation.payments)
+    ).filter(models.Reservation.id == reservation_id))
     reservation = res.scalars().first()
-    if not reservation:
-        raise HTTPException(status_code=404, detail="Rezervace nenalezena.")
-
+    if not reservation: raise HTTPException(status_code=404, detail="Rezervace nenalezena.")
     total_charges = sum(c.total_price for c in reservation.charges) + (reservation.total_price or 0)
     total_paid = sum(p.amount for p in reservation.payments)
-
     return schemas.Bill(
-        reservation_details=reservation,
-        charges=reservation.charges,
-        total_due=total_charges,
-        total_paid=total_paid,
-        balance=total_charges - total_paid
+        reservation_details=reservation, charges=reservation.charges,
+        total_due=total_charges, total_paid=total_paid, balance=total_charges - total_paid
     )
 
 async def record_payment(db: AsyncSession, reservation_id: int, payment_data: schemas.PaymentCreate):
     reservation = await db.get(models.Reservation, reservation_id)
-    if not reservation:
-        raise HTTPException(status_code=404, detail="Rezervace nenalezena.")
-
-    db_payment = models.Payment(
-        reservation_id=reservation_id,
-        amount=payment_data.amount,
-        method=payment_data.method
-    )
+    if not reservation: raise HTTPException(status_code=404, detail="Rezervace nenalezena.")
+    db_payment = models.Payment(reservation_id=reservation_id, amount=payment_data.amount, method=payment_data.method)
     db.add(db_payment)
     await db.commit()
     await db.refresh(db_payment)
     return db_payment
 
-# ===================================================================
-# CRUD pro Dashboard
-# ===================================================================
-
+# --- CRUD pro Dashboard ---
 async def get_timeline_data(db: AsyncSession, start_date: date, end_date: date) -> List[schemas.RoomTimeline]:
-    """
-    Sestaví data pro časovou osu po jednotlivých pokojích.
-    Kombinuje rezervace a úkoly v daném časovém rozmezí.
-    """
-    # 1. Načteme všechny relevantní záznamy najednou
     rooms_res = await db.execute(select(models.Room).order_by(models.Room.number))
     rooms = rooms_res.scalars().all()
-    
-    reservations_res = await db.execute(
-        select(models.Reservation)
-        .options(joinedload(models.Reservation.guest))
-        .filter(models.Reservation.check_in_date <= end_date, models.Reservation.check_out_date >= start_date)
-    )
+    reservations_res = await db.execute(select(models.Reservation).options(joinedload(models.Reservation.guest)).filter(
+        models.Reservation.check_in_date <= end_date, models.Reservation.check_out_date >= start_date))
     reservations = reservations_res.scalars().all()
-
-    tasks_res = await db.execute(
-        select(models.Task)
-        .options(joinedload(models.Task.assignee))
-        .filter(models.Task.due_date >= start_date, models.Task.due_date <= end_date)
-    )
+    tasks_res = await db.execute(select(models.Task).options(joinedload(models.Task.assignee)).filter(
+        models.Task.due_date >= start_date, models.Task.due_date <= end_date))
     tasks = tasks_res.scalars().all()
-
-    # 2. Zpracujeme data v Pythonu
     room_map = {room.id: schemas.RoomTimeline(room_id=room.id, room_number=room.number, events=[]) for room in rooms}
-
     for res in reservations:
         if res.room_id in room_map:
             event = schemas.ReservationEvent(
-                title=f"Rezervace: {res.guest.name}",
-                start_date=datetime.combine(res.check_in_date, datetime.min.time()),
-                end_date=datetime.combine(res.check_out_date, datetime.max.time()),
-                reservation_id=res.id,
-                guest_name=res.guest.name,
-                status=res.status
+                title=f"Rezervace: {res.guest.name}", start_date=datetime.combine(res.check_in_date, datetime.min.time()),
+                end_date=datetime.combine(res.check_out_date, datetime.max.time()), reservation_id=res.id,
+                guest_name=res.guest.name, status=res.status
             )
             room_map[res.room_id].events.append(event)
-    
     for task in tasks:
         if task.room_id and task.room_id in room_map:
             event = schemas.TaskEvent(
-                title=f"Úkol: {task.title}",
-                start_date=datetime.combine(task.due_date, datetime.min.time()),
-                end_date=datetime.combine(task.due_date, datetime.max.time()),
-                task_id=task.id,
-                assignee_email=task.assignee.email if task.assignee else "Nepřiřazeno",
-                status=task.status
+                title=f"Úkol: {task.title}", start_date=datetime.combine(task.due_date, datetime.min.time()),
+                end_date=datetime.combine(task.due_date, datetime.max.time()), task_id=task.id,
+                assignee_email=task.assignee.email if task.assignee else "Nepřiřazeno", status=task.status
             )
             room_map[task.room_id].events.append(event)
-            
     return list(room_map.values())
 
-
 async def get_employees_schedule(db: AsyncSession, start_date: date, end_date: date) -> List[schemas.EmployeeSchedule]:
-    """Sestaví data pro kalendář zaměstnanců a jejich úkolů."""
-    
-    tasks = await db.execute(
-        select(models.Task)
-        .options(joinedload(models.Task.assignee), joinedload(models.Task.room))
-        .filter(models.Task.due_date >= start_date, models.Task.due_date <= end_date, models.Task.assignee_id != None)
-        .order_by(models.Task.assignee_id, models.Task.due_date)
-    )
-    
+    tasks = await db.execute(select(models.Task).options(joinedload(models.Task.assignee), joinedload(models.Task.room)).filter(
+        models.Task.due_date >= start_date, models.Task.due_date <= end_date, models.Task.assignee_id != None
+    ).order_by(models.Task.assignee_id, models.Task.due_date))
     employee_tasks = {}
     for task in tasks.scalars().all():
         if task.assignee_id not in employee_tasks:
-            employee_tasks[task.assignee_id] = {
-                "employee": task.assignee,
-                "tasks": []
-            }
+            employee_tasks[task.assignee_id] = {"employee": task.assignee, "tasks": []}
         employee_tasks[task.assignee_id]["tasks"].append(task)
-        
-    result = [
-        schemas.EmployeeSchedule(employee=data["employee"], tasks=data["tasks"])
-        for data in employee_tasks.values()
-    ]
+    result = [schemas.EmployeeSchedule(employee=data["employee"], tasks=data["tasks"]) for data in employee_tasks.values()]
     return result
 
 async def get_active_tasks(db: AsyncSession) -> List[schemas.ActiveTask]:
-    """Vrátí seznam úkolů, které jsou aktuálně ve stavu 'probíhá'."""
-    
-    active_tasks_res = await db.execute(
-        select(models.Task)
-        .options(joinedload(models.Task.assignee), joinedload(models.Task.room))
-        .filter(models.Task.status == models.TaskStatus.probiha)
-    )
-    
+    active_tasks_res = await db.execute(select(models.Task).options(
+        joinedload(models.Task.assignee), joinedload(models.Task.room)
+    ).filter(models.Task.status == models.TaskStatus.probiha))
     active_tasks = []
     for task in active_tasks_res.scalars().all():
-        active_tasks.append(schemas.ActiveTask(
-            task_id=task.id,
-            title=task.title,
-            status=task.status,
-            employee=task.assignee,
-            room=task.room
-        ))
-        
+        if task.assignee:
+            active_tasks.append(schemas.ActiveTask(
+                task_id=task.id, title=task.title, status=task.status,
+                employee=task.assignee, room=task.room
+            ))
     return active_tasks

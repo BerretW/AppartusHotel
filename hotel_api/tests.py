@@ -8,7 +8,7 @@ timestamp = int(time.time())
 ADMIN_EMAIL = f"admin.{timestamp}@hotel.com"
 HOUSEKEEPER_EMAIL = f"uklizecka.{timestamp}@hotel.com"
 STOREKEEPER_EMAIL = f"skladnik.{timestamp}@hotel.com"
-ADMIN_PASSWORD = "1234"
+ADMIN_PASSWORD = "admin_password_123"
 USER_PASSWORD = "password123"
 
 # Globální proměnné, které budeme postupně naplňovat
@@ -88,83 +88,117 @@ def run_hotel_tests():
     central_storage_id = central_storage["id"]
     print(f"  -> Centrální sklad nalezen (ID: {central_storage_id}).")
 
-    room_payload = {"number": "101", "type": "Apartmá", "capacity": 4}
+    # --- ZDE JE OPRAVA č. 1: Unikátní číslo pokoje ---
+    unique_room_number = f"101-{timestamp}"
+    room_payload = {"number": unique_room_number, "type": "Apartmá", "capacity": 4, "price_per_night": 2500.0}
     room_data = print_result(requests.post(f"{BASE_URL}/rooms/", json=room_payload, headers=get_headers()), 201)
     room_101_id = room_data["id"]
     room_101_location_id = room_data["location_id"]
-    print(f"  -> Pokoj 101 (ID: {room_101_id}) vytvořen s minibarem (Lokace ID: {room_101_location_id}).")
+    print(f"  -> Pokoj {unique_room_number} (ID: {room_101_id}) vytvořen s minibarem (Lokace ID: {room_101_location_id}).")
 
-    item_payload = {"name": "Coca-Cola 0.33l", "price": 50.0}
+    # --- ZDE JE OPRAVA č. 2: Unikátní název položky ---
+    unique_item_name = f"Coca-Cola 0.33l-{timestamp}"
+    item_payload = {"name": unique_item_name, "price": 50.0}
     item_data = print_result(requests.post(f"{BASE_URL}/inventory/items/", json=item_payload, headers=get_headers()), 201)
     coke_id = item_data["id"]
-    print(f"  -> Skladová položka 'Coca-Cola' (ID: {coke_id}) vytvořena.")
+    print(f"  -> Skladová položka '{unique_item_name}' (ID: {coke_id}) vytvořena.")
 
     # 3. ZÁKLADNÍ SKLADOVÉ OPERACE
     print_step("3. Skladové operace - Příjemka a Přesun")
     storekeeper_login_payload = {"username": STOREKEEPER_EMAIL, "password": USER_PASSWORD}
     storekeeper_token = print_result(requests.post(f"{BASE_URL}/auth/token", data=storekeeper_login_payload), 200)["access_token"]
     
-    print("  -> Vytvoření příjemky na 24ks Coca-Coly do centrálního skladu...")
-    receipt_payload = {
-        "supplier": f"Dodavatel Limonad {timestamp}",
-        "items": [{"item_id": coke_id, "quantity": 24}]
-    }
+    receipt_payload = {"supplier": f"Dodavatel Limonad {timestamp}", "items": [{"item_id": coke_id, "quantity": 24}]}
     print_result(requests.post(f"{BASE_URL}/inventory/receipts/", json=receipt_payload, headers=get_headers("storekeeper")), 201)
+    print("  -> Vytvořena příjemka na 24ks Coca-Coly.")
 
-    print("  -> Přesun 10ks Coca-Coly z centrálního skladu do minibaru pokoje 101...")
-    transfer_payload = {
-        "item_id": coke_id,
-        "quantity": 10,
-        "source_location_id": central_storage_id,
-        "destination_location_id": room_101_location_id
-    }
+    transfer_payload = {"item_id": coke_id, "quantity": 10, "source_location_id": central_storage_id, "destination_location_id": room_101_location_id}
     print_result(requests.post(f"{BASE_URL}/inventory/stock/transfer", json=transfer_payload, headers=get_headers("storekeeper")), 200)
+    print("  -> Přesunuto 10ks Coca-Coly do minibaru pokoje 101.")
 
-    print("  -> Kontrola stavu zásob na pokoji 101...")
-    stock_response = print_result(requests.get(f"{BASE_URL}/inventory/locations/{room_101_location_id}/stock", headers=get_headers()), 200)
-    assert len(stock_response) > 0, "Minibar pokoje 101 by neměl být prázdný"
-    assert stock_response[0]["item"]["id"] == coke_id, "V minibaru je špatná položka"
-    assert stock_response[0]["quantity"] == 10, "V minibaru je špatné množství"
-    print("  -> Stav zásob v minibaru je správný.")
+    # 4. SPRÁVA REZERVACÍ A ÚČTOVÁNÍ
+    print_step("4. Správa rezervací a účtování")
+    check_in_date = (datetime.now() + timedelta(days=3)).strftime('%Y-%m-%d')
+    check_out_date = (datetime.now() + timedelta(days=5)).strftime('%Y-%m-%d')
+    reservation_payload = {
+        "room_id": room_101_id,
+        "guest_name": "Jan Novák",
+        "guest_email": f"jan.novak.{timestamp}@test.cz",
+        "check_in_date": check_in_date,
+        "check_out_date": check_out_date
+    }
+    reservation_data = print_result(requests.post(f"{BASE_URL}/reservations/", json=reservation_payload, headers=get_headers()), 201)
+    reservation_id = reservation_data["id"]
+    print(f"  -> Vytvořena rezervace (ID: {reservation_id}) pro Jana Nováka.")
+
+    print_result(requests.post(f"{BASE_URL}/reservations/{reservation_id}/checkin", headers=get_headers()), 200)
+    print("  -> Host Jan Novák byl ubytován (check-in). Pokoj je nyní 'Obsazeno'.")
+
+    charge_payload = {"item_id": coke_id, "quantity": 1}
+    print_result(requests.post(f"{BASE_URL}/rooms/{room_101_id}/charges", json=charge_payload, headers=get_headers()), 201)
+    print("  -> Na účet pokoje byla přidána 1x Coca-Cola z minibaru.")
     
-    # 4. PRÁCE S ÚKOLY A STAVY POKOJŮ
-    print_step("4. Správa úkolů a pokojů")
-    due_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+    stock_response = print_result(requests.get(f"{BASE_URL}/inventory/locations/{room_101_location_id}/stock", headers=get_headers()), 200)
+    assert stock_response[0]["quantity"] == 9, "V minibaru by mělo být již jen 9ks Coly."
+    print("  -> Stav zásob v minibaru byl správně snížen na 9ks.")
+
+    bill_data = print_result(requests.get(f"{BASE_URL}/reservations/{reservation_id}/bill", headers=get_headers()), 200)
+    expected_total = 2 * 2500.0 + 50.0 # 2 noci + 1 cola
+    assert bill_data["total_due"] == expected_total, f"Celková cena na účtu nesouhlasí. Očekáváno: {expected_total}, zjištěno: {bill_data['total_due']}"
+    print(f"  -> Účet pro rezervaci byl správně spočítán na {expected_total} Kč.")
+
+    print_result(requests.post(f"{BASE_URL}/reservations/{reservation_id}/checkout", headers=get_headers()), 200)
+    print("  -> Host Jan Novák byl odubytován (check-out). Pokoj je nyní 'Volno - Čeká na úklid'.")
+    
+    # 5. SPRÁVA ÚKOLŮ
+    print_step("5. Správa úkolů")
+    due_date = (datetime.now() + timedelta(days=5)).strftime('%Y-%m-%d')
     task_payload = {
-        "title": "Důkladný úklid pokoje 101",
+        "title": "Úklid po odjezdu hosta",
         "assignee_id": housekeeper_user_id,
-        "due_date": due_date
+        "due_date": due_date,
+        "room_id": room_101_id
     }
     task_data = print_result(requests.post(f"{BASE_URL}/tasks/", json=task_payload, headers=get_headers()), 201)
     task_id = task_data["id"]
-    print(f"  -> Vytvořen úkol (ID: {task_id}) pro uklízečku.")
+    print(f"  -> Vytvořen úkol úklidu (ID: {task_id}) pro uklízečku a pokoj 101.")
 
-    print("  -> Uklízečka si načítá své úkoly...")
     housekeeper_login_payload = {"username": HOUSEKEEPER_EMAIL, "password": USER_PASSWORD}
     housekeeper_token = print_result(requests.post(f"{BASE_URL}/auth/token", data=housekeeper_login_payload), 200)["access_token"]
     
+    print("  -> Uklízečka mění stav pokoje a úkolu (začátek úklidu)...")
+    print_result(requests.patch(f"{BASE_URL}/rooms/{room_101_id}/status", json={"status": "Probíhá úklid"}, headers=get_headers("housekeeper")), 200)
+    print_result(requests.patch(f"{BASE_URL}/tasks/{task_id}/status", json={"status": "probíhá"}, headers=get_headers("housekeeper")), 200)
+    
+    # 6. KONTROLA DASHBOARDU
+    print_step("6. Kontrola dashboard endpointů")
     start_date = datetime.now().strftime('%Y-%m-%d')
-    end_date = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d')
-    my_tasks = print_result(requests.get(f"{BASE_URL}/tasks/my/?start_date={start_date}&end_date={end_date}", headers=get_headers("housekeeper")), 200)
-    assert len(my_tasks) > 0, "Uklízečka by měla mít přiřazený úkol"
-    assert my_tasks[0]["id"] == task_id, "Uklízečka má přiřazený špatný úkol"
-    print("  -> Úkoly úspěšně načteny.")
-
-    print("  -> Uklízečka mění stav pokoje a úkolu...")
+    end_date = (datetime.now() + timedelta(days=10)).strftime('%Y-%m-%d')
     
-    # Uklízečka začíná úklid - ZDE JE OPRAVA
-    status_payload = {"status": "Probíhá úklid"}
-    print_result(requests.patch(f"{BASE_URL}/rooms/{room_101_id}/status", json=status_payload, headers=get_headers("housekeeper")), 200)
+    print("  -> Testování dashboardu aktivních úkolů...")
+    active_tasks = print_result(requests.get(f"{BASE_URL}/dashboard/active-tasks", headers=get_headers()), 200)
+    assert any(task['task_id'] == task_id for task in active_tasks), "Aktivní úkol úklidu nebyl nalezen na dashboardu."
+    print("  -> OK: Probíhající úklid se správně zobrazil na dashboardu aktivních úkolů.")
+
+    print("  -> Testování timeline pokojů...")
+    timeline_data = print_result(requests.get(f"{BASE_URL}/dashboard/timeline?start_date={start_date}&end_date={end_date}", headers=get_headers()), 200)
+    room_101_timeline = next((r for r in timeline_data if r['room_id'] == room_101_id), None)
+    assert room_101_timeline is not None, "Timeline pro pokoj 101 nebyla nalezena."
+    assert any(e['type'] == 'reservation' and e['reservation_id'] == reservation_id for e in room_101_timeline['events']), "Rezervace chybí v timeline pokoje."
+    assert any(e['type'] == 'task' and e['task_id'] == task_id for e in room_101_timeline['events']), "Úkol úklidu chybí v timeline pokoje."
+    print("  -> OK: Timeline pokoje 101 obsahuje rezervaci i plánovaný úkol.")
     
-    # Uklízečka dokončila úklid - ZDE JE OPRAVA
-    status_payload = {"status": "Volno - Uklizeno"}
-    print_result(requests.patch(f"{BASE_URL}/rooms/{room_101_id}/status", json=status_payload, headers=get_headers("housekeeper")), 200)
+    print("  -> Testování plánu zaměstnanců...")
+    schedule_data = print_result(requests.get(f"{BASE_URL}/dashboard/employees-schedule?start_date={start_date}&end_date={end_date}", headers=get_headers()), 200)
+    housekeeper_schedule = next((s for s in schedule_data if s['employee']['id'] == housekeeper_user_id), None)
+    assert housekeeper_schedule is not None, "Plán pro uklízečku nebyl nalezen."
+    assert any(t['id'] == task_id for t in housekeeper_schedule['tasks']), "Úkol úklidu chybí v plánu uklízečky."
+    print("  -> OK: Plán uklízečky správně obsahuje přidělený úkol.")
 
-    # Uklízečka označí úkol jako dokončený
-    task_status_payload = {"status": "dokončeno"}
-    print_result(requests.patch(f"{BASE_URL}/tasks/{task_id}/status", json=task_status_payload, headers=get_headers("housekeeper")), 200)
-    print("  -> Stav pokoje a úkolu úspěšně změněn.")
-
+    print("  -> Uklízečka dokončuje úklid...")
+    print_result(requests.patch(f"{BASE_URL}/rooms/{room_101_id}/status", json={"status": "Volno - Uklizeno"}, headers=get_headers("housekeeper")), 200)
+    print_result(requests.patch(f"{BASE_URL}/tasks/{task_id}/status", json={"status": "dokončeno"}, headers=get_headers("housekeeper")), 200)
+    print("  -> Stav pokoje a úkolu úspěšně změněn na dokončeno.")
 
     # FINÁLNÍ ZPRÁVA
     print("\n" + "="*60)
@@ -174,7 +208,7 @@ def run_hotel_tests():
 
 if __name__ == "__main__":
     try:
-        time.sleep(2)
+        time.sleep(3)
         run_hotel_tests()
     except requests.exceptions.ConnectionError:
         print("\n\033[91mFATÁLNÍ CHYBA: Nelze se připojit k API serveru.\033[0m")
@@ -182,4 +216,6 @@ if __name__ == "__main__":
     except AssertionError as e:
         print(f"\n\033[91m--- TEST SELHAL: {e} ---\033[0m")
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"\n\033[91mDošlo k neočekávané chybě: {e}\033[0m")

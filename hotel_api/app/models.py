@@ -57,23 +57,25 @@ class Task(Base):
     assignee_id = Column(Integer, ForeignKey("users.id"))
     assignee = relationship("User", back_populates="tasks_assigned")
     
-    # --- NOVÉ POLE ---
-    # Umožňuje přímé spojení úkolu s konkrétním pokojem
-    room_id = Column(Integer, ForeignKey("rooms.id"), nullable=True) 
-    room = relationship("Room")
+    # --- Klíčová definice ---
+    room_id = Column(Integer, ForeignKey("rooms.id"), nullable=True)
+    room = relationship("Room", back_populates="tasks")
 
 class Room(Base):
     __tablename__ = "rooms"
     id = Column(Integer, primary_key=True, index=True)
-    number = Column(String(10), unique=True, index=True, nullable=False)
+    number = Column(String(20), unique=True, index=True, nullable=False)
     type = Column(String(100), nullable=False, default="Standard")
     capacity = Column(Integer, default=2)
-    price_per_night = Column(Float, default=1000.0) # Nové pole
+    price_per_night = Column(Float, default=1000.0)
     status = Column(SQLAlchemyEnum(RoomStatus), default=RoomStatus.available_clean)
     
     location_id = Column(Integer, ForeignKey("locations.id"))
     location = relationship("Location", back_populates="room")
     reservations = relationship("Reservation", back_populates="room")
+    
+    # --- Klíčová definice ---
+    tasks = relationship("Task", back_populates="room")
 
 class Location(Base):
     __tablename__ = "locations"
@@ -120,8 +122,6 @@ class ReceiptItem(Base):
     receipt = relationship("Receipt", back_populates="items")
     item = relationship("InventoryItem")
 
-# --- NOVÉ MODELY PRO REZERVACE A ÚČTOVÁNÍ ---
-
 class Guest(Base):
     __tablename__ = "guests"
     id = Column(Integer, primary_key=True, index=True)
@@ -165,7 +165,7 @@ class Payment(Base):
     __tablename__ = "payments"
     id = Column(Integer, primary_key=True, index=True)
     amount = Column(Float, nullable=False)
-    method = Column(String(50), nullable=False) # "cash", "card"
+    method = Column(String(50), nullable=False)
     paid_at = Column(DateTime, default=datetime.utcnow)
     
     reservation_id = Column(Integer, ForeignKey("reservations.id"), nullable=False)
