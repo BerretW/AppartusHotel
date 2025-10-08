@@ -56,6 +56,11 @@ class Task(Base):
     
     assignee_id = Column(Integer, ForeignKey("users.id"))
     assignee = relationship("User", back_populates="tasks_assigned")
+    
+    # --- NOVÉ POLE ---
+    # Umožňuje přímé spojení úkolu s konkrétním pokojem
+    room_id = Column(Integer, ForeignKey("rooms.id"), nullable=True) 
+    room = relationship("Room")
 
 class Room(Base):
     __tablename__ = "rooms"

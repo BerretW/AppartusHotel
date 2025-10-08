@@ -1,6 +1,6 @@
 # FILE: hotel_api/app/schemas.py
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional, List
+from typing import Optional, List, Union # Přidán Union
 from datetime import date, datetime
 from .models import UserRole, TaskStatus, RoomStatus, ReservationStatus
 
@@ -218,3 +218,64 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     email: Optional[str] = None
+
+# ===================================================================
+# Schémata pro Dashboard a Kalendář
+# ===================================================================
+
+# -- Schémata pro časovou osu (Timeline) --
+
+class EventBase(BaseModel):
+    """Základní vlastnosti pro jakoukoliv událost v kalendáři."""
+    title: str
+    start_date: datetime
+    end_date: datetime
+
+class ReservationEvent(EventBase):
+    type: str = "reservation"
+    reservation_id: int
+    guest_name: str
+    status: ReservationStatus
+
+class TaskEvent(EventBase):
+    type: str = "task"
+    task_id: int
+    assignee_email: Optional[str]
+    status: TaskStatus
+
+# Union umožňuje, aby seznam obsahoval různé typy událostí
+TimelineEvent = Union[ReservationEvent, TaskEvent]
+
+class RoomTimeline(BaseModel):
+    """Reprezentuje časovou osu pro jeden konkrétní pokoj."""
+    room_id: int
+    room_number: str
+    events: List[TimelineEvent]
+
+# -- Schémata pro přehled zaměstnanců --
+
+# Rozšíříme existující schéma úkolu o detaily pro dashboard
+class TaskWithDetails(Task):
+    room: Optional[Room] = None
+    assignee: Employee
+
+    class Config:
+        from_attributes = True
+
+class EmployeeSchedule(BaseModel):
+    """Reprezentuje plán pro jednoho zaměstnance."""
+    employee: Employee
+    tasks: List[TaskWithDetails]
+
+# -- Schéma pro aktivní úkoly --
+
+class ActiveTask(BaseModel):
+    """Detailní pohled na úkol, který právě probíhá."""
+    task_id: int
+    title: str
+    status: TaskStatus
+    employee: Employee
+    room: Optional[Room]
+
+    class Config:
+        from_attributes = True

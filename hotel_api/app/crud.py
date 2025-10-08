@@ -344,3 +344,106 @@ async def record_payment(db: AsyncSession, reservation_id: int, payment_data: sc
     await db.commit()
     await db.refresh(db_payment)
     return db_payment
+
+# ===================================================================
+# CRUD pro Dashboard
+# ===================================================================
+
+async def get_timeline_data(db: AsyncSession, start_date: date, end_date: date) -> List[schemas.RoomTimeline]:
+    """
+    Sestaví data pro časovou osu po jednotlivých pokojích.
+    Kombinuje rezervace a úkoly v daném časovém rozmezí.
+    """
+    # 1. Načteme všechny relevantní záznamy najednou
+    rooms_res = await db.execute(select(models.Room).order_by(models.Room.number))
+    rooms = rooms_res.scalars().all()
+    
+    reservations_res = await db.execute(
+        select(models.Reservation)
+        .options(joinedload(models.Reservation.guest))
+        .filter(models.Reservation.check_in_date <= end_date, models.Reservation.check_out_date >= start_date)
+    )
+    reservations = reservations_res.scalars().all()
+
+    tasks_res = await db.execute(
+        select(models.Task)
+        .options(joinedload(models.Task.assignee))
+        .filter(models.Task.due_date >= start_date, models.Task.due_date <= end_date)
+    )
+    tasks = tasks_res.scalars().all()
+
+    # 2. Zpracujeme data v Pythonu
+    room_map = {room.id: schemas.RoomTimeline(room_id=room.id, room_number=room.number, events=[]) for room in rooms}
+
+    for res in reservations:
+        if res.room_id in room_map:
+            event = schemas.ReservationEvent(
+                title=f"Rezervace: {res.guest.name}",
+                start_date=datetime.combine(res.check_in_date, datetime.min.time()),
+                end_date=datetime.combine(res.check_out_date, datetime.max.time()),
+                reservation_id=res.id,
+                guest_name=res.guest.name,
+                status=res.status
+            )
+            room_map[res.room_id].events.append(event)
+    
+    for task in tasks:
+        if task.room_id and task.room_id in room_map:
+            event = schemas.TaskEvent(
+                title=f"Úkol: {task.title}",
+                start_date=datetime.combine(task.due_date, datetime.min.time()),
+                end_date=datetime.combine(task.due_date, datetime.max.time()),
+                task_id=task.id,
+                assignee_email=task.assignee.email if task.assignee else "Nepřiřazeno",
+                status=task.status
+            )
+            room_map[task.room_id].events.append(event)
+            
+    return list(room_map.values())
+
+
+async def get_employees_schedule(db: AsyncSession, start_date: date, end_date: date) -> List[schemas.EmployeeSchedule]:
+    """Sestaví data pro kalendář zaměstnanců a jejich úkolů."""
+    
+    tasks = await db.execute(
+        select(models.Task)
+        .options(joinedload(models.Task.assignee), joinedload(models.Task.room))
+        .filter(models.Task.due_date >= start_date, models.Task.due_date <= end_date, models.Task.assignee_id != None)
+        .order_by(models.Task.assignee_id, models.Task.due_date)
+    )
+    
+    employee_tasks = {}
+    for task in tasks.scalars().all():
+        if task.assignee_id not in employee_tasks:
+            employee_tasks[task.assignee_id] = {
+                "employee": task.assignee,
+                "tasks": []
+            }
+        employee_tasks[task.assignee_id]["tasks"].append(task)
+        
+    result = [
+        schemas.EmployeeSchedule(employee=data["employee"], tasks=data["tasks"])
+        for data in employee_tasks.values()
+    ]
+    return result
+
+async def get_active_tasks(db: AsyncSession) -> List[schemas.ActiveTask]:
+    """Vrátí seznam úkolů, které jsou aktuálně ve stavu 'probíhá'."""
+    
+    active_tasks_res = await db.execute(
+        select(models.Task)
+        .options(joinedload(models.Task.assignee), joinedload(models.Task.room))
+        .filter(models.Task.status == models.TaskStatus.probiha)
+    )
+    
+    active_tasks = []
+    for task in active_tasks_res.scalars().all():
+        active_tasks.append(schemas.ActiveTask(
+            task_id=task.id,
+            title=task.title,
+            status=task.status,
+            employee=task.assignee,
+            room=task.room
+        ))
+        
+    return active_tasks

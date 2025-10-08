@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 # Importujeme všechny potřebné routery
 # Přidáno 'reservations'
-from .routers import auth, users, tasks, rooms, inventory, reservations
+from .routers import auth, users, tasks, rooms, inventory, reservations,dashboard
 from .database import get_db
 from . import crud
 from fastapi.middleware.cors import CORSMiddleware
@@ -56,6 +56,7 @@ app.include_router(tasks.router)
 app.include_router(rooms.router)
 app.include_router(inventory.router)
 app.include_router(reservations.router) # Přidán nový router
+app.include_router(dashboard.router) # Přidán nový router
 
 
 @app.get("/", tags=["Root"])
