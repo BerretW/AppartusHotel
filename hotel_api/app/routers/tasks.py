@@ -5,7 +5,7 @@ from datetime import date
 
 from .. import crud, models, schemas
 from ..database import get_db
-from ..dependencies import get_current_active_user
+from ..dependencies import get_current_active_user, is_admin_or_manager
 
 router = APIRouter(prefix="/tasks", tags=["Úkoly"])
 
@@ -29,7 +29,11 @@ async def update_task_status(
     db_task = await crud.get_task_by_id(db, task_id=task_id)
     if not db_task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if db_task.assignee_id != current_user.id:
+    
+    # Umožníme adminovi/manažerovi měnit stav jakéhokoli úkolu
+    is_manager = current_user.role in [models.UserRole.majitel, models.UserRole.spravce]
+
+    if not is_manager and db_task.assignee_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your task to update")
     
     db_task.status = task_update.status
@@ -40,21 +44,16 @@ async def update_task_status(
     await db.refresh(db_task)
     return db_task
 
-# Toto je jen ukázka, jak by admin/manažer mohl vytvářet úkoly
-@router.post("/", response_model=schemas.Task, status_code=201)
+# Endpoint pro vytváření úkolů s ověřením oprávnění
+@router.post("/", response_model=schemas.Task, status_code=201, dependencies=[Depends(is_admin_or_manager)])
 async def create_task_for_user(
     task: schemas.TaskCreate,
     db: AsyncSession = Depends(get_db)
-    # Zde by byla závislost pro ověření, že je přihlášený uživatel manažer
-    # current_user: models.User = Depends(get_current_manager)
 ):
-    db_task = models.Task(
-        title=task.title,
-        notes=task.notes,
-        assignee_id=task.assignee_id,
-        due_date=task.due_date
-    )
-    db.add(db_task)
-    await db.commit()
-    await db.refresh(db_task)
-    return db_task
+    """
+    Vytvoří nový úkol pro zaměstnance.
+    Vyžaduje oprávnění 'majitel' nebo 'spravce'.
+    """
+    # **TOTO JE KLÍČOVÁ OPRAVA:**
+    # Použijeme existující CRUD funkci, která správně zpracovává všechny parametry, včetně `room_id`.
+    return await crud.create_task(db=db, task=task)
