@@ -9,6 +9,7 @@ from ..dependencies import is_admin_or_manager, can_change_room_status
 
 router = APIRouter(prefix="/rooms", tags=["Pokoje"])
 
+# --- Správa Pokojů ---
 @router.post("/", response_model=schemas.Room, status_code=status.HTTP_201_CREATED, dependencies=[Depends(is_admin_or_manager)])
 async def create_room(room: schemas.RoomCreate, db: AsyncSession = Depends(get_db)):
     db_room = await crud.get_room_by_number(db, number=room.number)
@@ -40,31 +41,25 @@ async def update_room_status(
     await db.refresh(db_room)
     return db_room
 
-# --- NOVÝ ENDPOINT ---
-@router.patch("/{room_id}", response_model=schemas.Room, dependencies=[Depends(is_admin_or_manager)])
-async def update_room_details(
-    room_id: int,
-    room_update: schemas.RoomUpdate,
+# --- NOVÉ: Správa Blokací Pokojů ---
+@router.post("/blocks/", response_model=schemas.RoomBlock, status_code=201, dependencies=[Depends(is_admin_or_manager)])
+async def create_a_room_block(
+    block_data: schemas.RoomBlockCreate,
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Umožní upravit detaily pokoje (typ, kapacita, cena).
-    Vyžaduje oprávnění 'majitel' nebo 'spravce'.
+    Vytvoří blokaci pro pokoj na zadané období (např. z důvodu údržby).
+    Pokoj nebude v tomto období nabízen k rezervaci.
     """
-    updated_room = await crud.update_room(db, room_id, room_update)
-    if not updated_room:
-        raise HTTPException(status_code=404, detail="Pokoj nebyl nalezen.")
-    return updated_room
+    return await crud.create_room_block(db, block=block_data)
 
-# --- NOVÝ ENDPOINT PRO ÚČTOVÁNÍ ---
-@router.post("/{room_id}/charges", response_model=schemas.RoomCharge, status_code=201)
-async def add_charge_to_room_bill(
-    room_id: int,
-    charge_data: schemas.RoomChargeCreate,
+@router.delete("/blocks/{block_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(is_admin_or_manager)])
+async def delete_a_room_block(
+    block_id: int,
     db: AsyncSession = Depends(get_db)
-    # TODO: Přidat závislost např. na recepční
 ):
     """
-    Přidá položku na účet pokoje (např. konzumace z minibaru) a automaticky sníží stav zásob v minibaru.
+    Odstraní existující blokaci pokoje.
     """
-    return await crud.add_charge_to_room(db, room_id=room_id, charge_data=charge_data)
+    await crud.delete_room_block(db, block_id=block_id)
+    # Při statusu 204 se nevrací žádné tělo odpovědi

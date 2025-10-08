@@ -32,7 +32,6 @@ class TaskBase(BaseModel):
 class TaskCreate(TaskBase):
     assignee_id: int
     due_date: date
-    # --- Klíčová definice ---
     room_id: Optional[int] = None
 
 class TaskUpdateStatus(BaseModel):
@@ -47,19 +46,17 @@ class Task(TaskBase):
     room_id: Optional[int] = None
     class Config: from_attributes = True
 
-# --- Schémata pro Pokoje (Rooms) ---
+# --- Schémata pro Pokoje ---
 class RoomBase(BaseModel):
     number: str
     type: str = "Standard"
     capacity: int = 2
-    price_per_night: Optional[float] = None
 
 class RoomCreate(RoomBase): pass
 
 class RoomUpdate(BaseModel):
     type: Optional[str] = None
     capacity: Optional[int] = None
-    price_per_night: Optional[float] = None
 
 class RoomUpdateStatus(BaseModel):
     status: RoomStatus
@@ -68,6 +65,19 @@ class Room(RoomBase):
     id: int
     status: RoomStatus
     location_id: int
+    class Config: from_attributes = True
+
+# NOVÉ: Schéma pro blokaci pokoje
+class RoomBlockBase(BaseModel):
+    reason: str
+    start_date: date
+    end_date: date
+    room_id: int
+
+class RoomBlockCreate(RoomBlockBase): pass
+
+class RoomBlock(RoomBlockBase):
+    id: int
     class Config: from_attributes = True
 
 # --- Schémata pro Sklad (Inventory) ---
@@ -126,11 +136,13 @@ class GuestBase(BaseModel):
     name: str
     email: EmailStr
     phone: Optional[str] = None
+    preferences: Optional[str] = None
 
 class GuestCreate(GuestBase): pass
 
 class Guest(GuestBase):
     id: int
+    created_at: datetime
     class Config: from_attributes = True
 
 class ReservationCreate(BaseModel):
@@ -139,23 +151,33 @@ class ReservationCreate(BaseModel):
     guest_email: EmailStr
     check_in_date: date
     check_out_date: date
+    rate_plan_id: int # NOVÉ: Rezervace se váže na cenový plán
+
+class ReservationUpdate(BaseModel):
+    check_in_date: Optional[date] = None
+    check_out_date: Optional[date] = None
+    status: Optional[ReservationStatus] = None
 
 class Reservation(BaseModel):
     id: int
     check_in_date: date
     check_out_date: date
     status: ReservationStatus
+    accommodation_price: float
     room: Room
     guest: Guest
     class Config: from_attributes = True
 
 class RoomChargeCreate(BaseModel):
-    item_id: int
+    description: str
     quantity: int = Field(..., gt=0)
+    price_per_item: float
+    item_id: Optional[int] = None # Může jít o službu
 
 class RoomCharge(BaseModel):
     id: int
-    item: InventoryItem
+    description: str
+    item: Optional[InventoryItem] = None
     quantity: int
     total_price: float
     charged_at: datetime
@@ -164,15 +186,82 @@ class RoomCharge(BaseModel):
 class PaymentCreate(BaseModel):
     amount: float = Field(..., gt=0)
     method: str
+    notes: Optional[str] = None
+    
+class Payment(PaymentCreate):
+    id: int
+    paid_at: datetime
+    class Config: from_attributes = True
 
 class Bill(BaseModel):
     reservation_details: Reservation
     charges: List[RoomCharge]
-    total_due: float
+    payments: List[Payment]
+    total_accommodation: float
+    total_charges: float
+    grand_total: float
     total_paid: float
     balance: float
     
-# --- Schémata pro Dashboard a Kalendář ---
+# --- NOVÉ: Schémata pro Booking Engine (veřejná část) ---
+class AvailabilityRequest(BaseModel):
+    start_date: date
+    end_date: date
+    guests: int = Field(..., gt=0)
+
+class AvailableRoomType(BaseModel):
+    room_type: str
+    capacity: int
+    total_price: float
+    rate_plan_id: int
+    rate_plan_name: str
+
+class PublicReservationRequest(BaseModel):
+    room_type: str
+    rate_plan_id: int
+    guest_name: str
+    guest_email: EmailStr
+    phone: Optional[str] = None
+    check_in_date: date
+    check_out_date: date
+
+# --- NOVÉ: Schémata pro dynamickou cenotvorbu ---
+class RatePlanBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+class RatePlanCreate(RatePlanBase): pass
+
+class RatePlan(RatePlanBase):
+    id: int
+    class Config: from_attributes = True
+
+class RateBase(BaseModel):
+    date: date
+    price: float = Field(..., gt=0)
+    room_type: str
+    rate_plan_id: int
+
+class RateCreate(RateBase): pass
+
+class Rate(RateBase):
+    id: int
+    class Config: from_attributes = True
+
+class RestrictionBase(BaseModel):
+    date: date
+    min_stay: Optional[int] = None
+    closed_to_arrival: Optional[bool] = None
+    room_type: str
+    rate_plan_id: int
+    
+class RestrictionCreate(RestrictionBase): pass
+
+class Restriction(RestrictionBase):
+    id: int
+    class Config: from_attributes = True
+    
+# --- Schémata pro Dashboard a Kalendář (zůstávají stejná) ---
 class EventBase(BaseModel):
     title: str
     start_date: datetime
@@ -189,8 +278,14 @@ class TaskEvent(EventBase):
     task_id: int
     assignee_email: Optional[str]
     status: TaskStatus
+    
+# NOVÉ: Událost pro blokaci
+class BlockEvent(EventBase):
+    type: str = "block"
+    block_id: int
+    reason: str
 
-TimelineEvent = Union[ReservationEvent, TaskEvent]
+TimelineEvent = Union[ReservationEvent, TaskEvent, BlockEvent]
 
 class RoomTimeline(BaseModel):
     room_id: int
@@ -214,7 +309,7 @@ class ActiveTask(BaseModel):
     room: Optional[Room]
     class Config: from_attributes = True
 
-# --- Schémata pro Autentizaci ---
+# --- Schémata pro Autentizaci (zůstávají stejná) ---
 class Token(BaseModel):
     access_token: str
     token_type: str

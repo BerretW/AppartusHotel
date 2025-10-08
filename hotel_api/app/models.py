@@ -33,6 +33,7 @@ class ReservationStatus(str, enum.Enum):
     ubytovan = "ubytován"
     odhlasen = "odhlášen"
     zruseno = "zrušeno"
+    no_show = "no-show"  # NOVÝ STAV
 
 # --- Modely Tabulek ---
 
@@ -44,7 +45,7 @@ class User(Base):
     role = Column(SQLAlchemyEnum(UserRole), nullable=False, default=UserRole.host)
     is_active = Column(Boolean, default=True)
     
-    tasks_assigned = relationship("Task", back_populates="assignee", cascade="all, delete-orphan")
+    tasks_assigned = relationship("Task", back_populates="assignee")
 
 class Task(Base):
     __tablename__ = "tasks"
@@ -57,7 +58,6 @@ class Task(Base):
     assignee_id = Column(Integer, ForeignKey("users.id"))
     assignee = relationship("User", back_populates="tasks_assigned")
     
-    # --- Klíčová definice ---
     room_id = Column(Integer, ForeignKey("rooms.id"), nullable=True)
     room = relationship("Room", back_populates="tasks")
 
@@ -67,15 +67,25 @@ class Room(Base):
     number = Column(String(20), unique=True, index=True, nullable=False)
     type = Column(String(100), nullable=False, default="Standard")
     capacity = Column(Integer, default=2)
-    price_per_night = Column(Float, default=1000.0)
+    # price_per_night = Column(Float, default=1000.0) # TOTO POLE JE NAHRAZENO CENOVÝMI PLÁNY
     status = Column(SQLAlchemyEnum(RoomStatus), default=RoomStatus.available_clean)
     
     location_id = Column(Integer, ForeignKey("locations.id"))
     location = relationship("Location", back_populates="room")
     reservations = relationship("Reservation", back_populates="room")
-    
-    # --- Klíčová definice ---
     tasks = relationship("Task", back_populates="room")
+    blocks = relationship("RoomBlock", back_populates="room") # NOVÁ RELACE
+
+# NOVÝ MODEL: Blokace pokojů (pro údržbu atd.)
+class RoomBlock(Base):
+    __tablename__ = "room_blocks"
+    id = Column(Integer, primary_key=True, index=True)
+    reason = Column(String(255), nullable=False)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    
+    room_id = Column(Integer, ForeignKey("rooms.id"), nullable=False)
+    room = relationship("Room", back_populates="blocks")
 
 class Location(Base):
     __tablename__ = "locations"
@@ -129,6 +139,10 @@ class Guest(Base):
     email = Column(String(255), unique=True, index=True, nullable=False)
     phone = Column(String(50), nullable=True)
     
+    # NOVÁ POLE pro CRM
+    preferences = Column(String(1000), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
     reservations = relationship("Reservation", back_populates="guest")
 
 class Reservation(Base):
@@ -137,25 +151,34 @@ class Reservation(Base):
     check_in_date = Column(Date, nullable=False)
     check_out_date = Column(Date, nullable=False)
     status = Column(SQLAlchemyEnum(ReservationStatus), default=ReservationStatus.potvrzeno)
-    total_price = Column(Float, nullable=True)
+    
+    # Změna: cena za ubytování je nyní oddělená
+    accommodation_price = Column(Float, nullable=False, default=0.0)
     
     room_id = Column(Integer, ForeignKey("rooms.id"), nullable=False)
     guest_id = Column(Integer, ForeignKey("guests.id"), nullable=False)
+    
+    # NOVÁ POLE
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     room = relationship("Room", back_populates="reservations")
     guest = relationship("Guest", back_populates="reservations")
     charges = relationship("RoomCharge", back_populates="reservation")
     payments = relationship("Payment", back_populates="reservation")
 
+# ... (ostatní modely zůstávají stejné)
+
 class RoomCharge(Base):
     __tablename__ = "room_charges"
     id = Column(Integer, primary_key=True, index=True)
+    description = Column(String(255), nullable=False) # NOVÉ POLE
     quantity = Column(Integer, nullable=False)
     price_per_item = Column(Float, nullable=False)
     total_price = Column(Float, nullable=False)
     charged_at = Column(DateTime, default=datetime.utcnow)
     
-    item_id = Column(Integer, ForeignKey("inventory_items.id"), nullable=False)
+    item_id = Column(Integer, ForeignKey("inventory_items.id"), nullable=True) # Může být i služba bez vazby na sklad
     reservation_id = Column(Integer, ForeignKey("reservations.id"), nullable=False)
     
     item = relationship("InventoryItem")
@@ -166,7 +189,43 @@ class Payment(Base):
     id = Column(Integer, primary_key=True, index=True)
     amount = Column(Float, nullable=False)
     method = Column(String(50), nullable=False)
+    notes = Column(String(255), nullable=True) # NOVÉ POLE
     paid_at = Column(DateTime, default=datetime.utcnow)
     
     reservation_id = Column(Integer, ForeignKey("reservations.id"), nullable=False)
     reservation = relationship("Reservation", back_populates="payments")
+
+# --- NOVÁ SEKCE: DYNAMICKÁ CENOTVORBA ---
+
+class RatePlan(Base):
+    """ Cenový plán (např. 'Standardní', 'Nevratný', 'Se snídaní') """
+    __tablename__ = "rate_plans"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False)
+    description = Column(String(500))
+
+class Rate(Base):
+    """ Konkrétní cena pro typ pokoje na konkrétní den a v rámci plánu """
+    __tablename__ = "rates"
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(Date, nullable=False)
+    price = Column(Float, nullable=False)
+    
+    room_type = Column(String(100), nullable=False) # Cena se váže na typ pokoje, ne na konkrétní pokoj
+    rate_plan_id = Column(Integer, ForeignKey("rate_plans.id"), nullable=False)
+    
+    rate_plan = relationship("RatePlan")
+
+class Restriction(Base):
+    """ Omezení (např. minimální délka pobytu) """
+    __tablename__ = "restrictions"
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(Date, nullable=False)
+    
+    min_stay = Column(Integer, nullable=True) # Minimum stay
+    closed_to_arrival = Column(Boolean, default=False) # Nelze se ubytovat
+    
+    room_type = Column(String(100), nullable=False)
+    rate_plan_id = Column(Integer, ForeignKey("rate_plans.id"), nullable=False)
+    
+    rate_plan = relationship("RatePlan")

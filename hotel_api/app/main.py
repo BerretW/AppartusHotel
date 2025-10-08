@@ -1,20 +1,12 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-
-# Importujeme všechny potřebné routery
-# Přidáno 'reservations'
-from .routers import auth, users, tasks, rooms, inventory, reservations,dashboard
-from .database import get_db
-from . import crud
 from fastapi.middleware.cors import CORSMiddleware
 
 # Importujeme všechny potřebné routery
-from .routers import auth, users, tasks, rooms, inventory
+# Přidány nové: 'pricing', 'booking'
+from .routers import auth, users, tasks, rooms, inventory, reservations, dashboard, pricing, booking
 from .database import get_db
 from . import crud
-
-# Funkce, která se spustí při startu a ukončení aplikace
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -30,15 +22,15 @@ async def lifespan(app: FastAPI):
     # Kód zde se spustí PO ukončení aplikace
     print("Aplikace se ukončuje.")
 
-
-# Vytvoření instance aplikace s použitím naší lifespan funkce
+# Vytvoření instance aplikace
 app = FastAPI(
     title="Hotel Management API",
     description="Kompletní API pro správu hotelu.",
-    version="2.0.0 (s Alembic a plnou funkcionalitou)",
+    version="3.0.0 (s dynamickou cenotvorbou a booking engine)",
     lifespan=lifespan
 )
 
+# CORS Middleware
 origins = ["*"]
 app.add_middleware(
     CORSMiddleware,
@@ -48,17 +40,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # Propojení jednotlivých routerů
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(tasks.router)
 app.include_router(rooms.router)
 app.include_router(inventory.router)
-app.include_router(reservations.router) # Přidán nový router
-app.include_router(dashboard.router) # Přidán nový router
-
+app.include_router(reservations.router)
+app.include_router(dashboard.router)
+app.include_router(pricing.router) # NOVÝ ROUTER
+app.include_router(booking.router) # NOVÝ ROUTER
 
 @app.get("/", tags=["Root"])
 async def read_root():
-    return {"message": "Vítejte v Hotel Management API"}
+    return {"message": "Vítejte v Hotel Management API v3.0"}
